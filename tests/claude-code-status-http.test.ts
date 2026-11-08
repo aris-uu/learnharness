@@ -6,7 +6,7 @@ const claudeCodeInstallationResponse: typeof respond = (request, inspect) => res
 function request(headers: Record<string, string> = {}) {
 	return new Request("http://localhost:3000/api/claude-code", { headers: { "x-learnharness-claude-code": "1", ...headers } });
 }
-const status = { state: "not-found" as const, version: null, minimumVersion: "2.1.259" };
+const status = { state: "not-found" as const, version: null, minimumVersion: "2.1.317" };
 
 for (const headers of [
 	{ origin: "https://attacker.invalid" },

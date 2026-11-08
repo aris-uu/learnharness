@@ -15,7 +15,7 @@ Object.assign(globalThis, { window: dom.window, document: dom.document, Element:
 	CustomEvent: dom.window.CustomEvent, IS_REACT_ACT_ENVIRONMENT: true });
 const originalFetch = globalThis.fetch;
 let root: Root | undefined, host: HTMLDivElement | undefined;
-const status = (state: ClaudeCodeStatus["state"], version: string | null = null): ClaudeCodeStatus => ({ state, version, minimumVersion: "2.1.259" });
+const status = (state: ClaudeCodeStatus["state"], version: string | null = null): ClaudeCodeStatus => ({ state, version, minimumVersion: "2.1.317" });
 const button = () => document.querySelector<HTMLButtonElement>('[data-testid="claude-code-check-again"]')!;
 const toggle = () => document.querySelector<HTMLButtonElement>('[role="switch"]')!;
 const label = () => document.querySelector('[role="status"]')?.textContent;
