@@ -292,6 +292,8 @@ test("toClaudeArgs includes every isolation flag from Global Constraints", () =>
 		"opus",
 		"--effort",
 		"high",
+		"--thinking-display",
+		"summarized",
 		"--system-prompt-file",
 		"/private/system-prompt.md",
 		"--tools",
@@ -342,6 +344,34 @@ test("text scenario streams start, text_start, text_delta…, text_end, done(sto
 	assert.equal(done.message.model, "opus");
 
 	await assertCleanedUp(getOnlyCall(calls));
+});
+
+test("signature deltas are kept on the thinking block without emitting events", async (t) => {
+	const { events } = await runScenario(t, [
+		streamEvent({ type: "message_start", message: { usage: {} } }),
+		streamEvent({ type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } }),
+		streamEvent({ type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "c2lnbm" } }),
+		streamEvent({ type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "F0dXJl" } }),
+		streamEvent({ type: "content_block_stop", index: 0 }),
+		streamEvent({ type: "content_block_start", index: 1, content_block: { type: "text", text: "" } }),
+		streamEvent({ type: "content_block_delta", index: 1, delta: { type: "signature_delta", signature: "ignored" } }),
+		streamEvent({ type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "Hi" } }),
+		streamEvent({ type: "content_block_stop", index: 1 }),
+		streamEvent({ type: "message_delta", delta: { stop_reason: "end_turn" }, usage: {} }),
+		streamEvent({ type: "message_stop" }),
+	]);
+
+	assert.deepEqual(
+		events.map((event) => event.type),
+		["start", "thinking_start", "thinking_end", "text_start", "text_delta", "text_end", "done"],
+	);
+
+	const done = getLastEvent(events);
+	assert.ok(done.type === "done");
+	assert.deepEqual(done.message.content, [
+		{ type: "thinking", thinking: "", thinkingSignature: "c2lnbmF0dXJl" },
+		{ type: "text", text: "Hi" },
+	]);
 });
 
 test("thinking deltas map to thinking_*", async (t) => {

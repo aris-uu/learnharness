@@ -9,7 +9,7 @@ LearnHarness can use an externally installed **Claude Code CLI** as a model prov
 3. Enable **Settings → Providers → External CLI → Claude Code**. This app-wide opt-in is **off by default**. Use **Check again** to refresh installation status.
 4. Select a Claude Code model: `opus`, `sonnet`, or `haiku`. These are CLI aliases, not pinned underlying versions.
 
-The minimum version is **2.1.259** ([contract](../src/core/contracts/claude-code.ts)). The check runs only `--version`, not authentication or inference. Fresh model processes check again and refuse old/unverifiable versions. Passing proves neither account access, quota, billing method, nor complete protocol compatibility.
+The minimum version is **2.1.317** ([contract](../src/core/contracts/claude-code.ts)). The check runs only `--version`, not authentication or inference. Fresh model processes check again and refuse old/unverifiable versions. Passing proves neither account access, quota, billing method, nor complete protocol compatibility.
 
 Install, update, sign in, and change CLI accounts externally. LearnHarness has no CLI account-status or reauthentication control. Disabling the opt-in blocks future requests without rewriting model selections or signing out the CLI; it does not interrupt an already admitted turn. Use normal cancellation for running work.
 
@@ -27,7 +27,7 @@ These are integration boundaries, **not an OS sandbox or a provider-policy certi
 
 LearnHarness forces `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` in the child environment **and** inline settings, and pins `outputStyle: default`. User auth/routing settings otherwise remain available. The CLI's documented memory switch excludes user/project/managed-policy `CLAUDE.md` instructions, their imports/rules, and auto memory; it does not remove managed settings.
 
-These controls depend on the CLI honoring them. Instruction isolation at the accepted minimum **2.1.259 has not been runtime verified**. Official documentation does not establish the switch's first supported version or exact startup evaluation order; managed settings can outrank inline settings. This is not a guarantee against every plugin instruction channel or CLI-added account context.
+These controls depend on the CLI honoring them. Instruction isolation at the accepted minimum **2.1.317 has not been runtime verified**. Official documentation does not establish the switch's first supported version or exact startup evaluation order; managed settings can outrank inline settings. This is not a guarantee against every plugin instruction channel or CLI-added account context.
 
 Official references: [memory switch](https://code.claude.com/docs/en/env-vars#variables), [managed instruction files](https://code.claude.com/docs/en/memory#deploy-organization-wide-claude-md), [settings precedence](https://code.claude.com/docs/en/settings#settings-precedence), and [settings environment values](https://code.claude.com/docs/en/settings-reference#env).
 

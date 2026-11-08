@@ -7,6 +7,7 @@ export interface ClaudeCodeStatus {
 	minimumVersion: string;
 }
 
-// --permission-prompts none was added in 2.1.259. This is not an official
+// The oldest version verified to stream thinking text with --thinking-display summarized;
+// the release that introduced the flag is unknown. This is not an official
 // minimum-version/stability contract for claudecode/toolUseId; admission fails closed.
-export const CLAUDE_CODE_MINIMUM_VERSION = "2.1.259";
+export const CLAUDE_CODE_MINIMUM_VERSION = "2.1.317";

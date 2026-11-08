@@ -98,6 +98,9 @@ export function toClaudeArgs(input: ClaudeArgsInput): string[] {
 		input.model,
 		"--effort",
 		input.effort,
+		// Without this the CLI streams thinking blocks with signatures but no text.
+		"--thinking-display",
+		"summarized",
 		"--system-prompt-file",
 		input.systemPromptFile,
 		"--tools",
@@ -197,6 +200,15 @@ class ClaudeTurn {
 
 				block.thinking += event.thinking;
 				this.stream.push({ type: "thinking_delta", contentIndex, delta: event.thinking, partial: this.output });
+				return;
+			}
+
+			case "signatureDelta": {
+				const found = this.getBlock(event.index);
+				if (found?.block.type !== "thinking") return;
+
+				// The narration guard reads this to find prose converted into thinking.
+				found.block.thinkingSignature = (found.block.thinkingSignature ?? "") + event.signature;
 				return;
 			}
 
