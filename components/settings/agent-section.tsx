@@ -105,7 +105,7 @@ interface SegmentInfo {
 	shared: boolean;
 }
 
-type PromptView = Record<"teacher" | "prober" | "practice", SegmentInfo[]>;
+type PromptView = Record<"teacher" | "prober" | "practice", SegmentInfo[]> & { math?: SegmentInfo[] };
 type PromptRow = SegmentInfo & { usageHint?: string };
 
 /** Compose: one tool toggled, the rest of the section carried verbatim.
@@ -276,6 +276,7 @@ export function sectionedSegments(view: PromptView): PromptSection[] {
 				return { ...segment, usageHint: `Used by ${usage}` };
 			}),
 		},
+		...(view.math?.length ? [{ id: "math" as const, label: "Math mode", segments: view.math.map((segment) => ({ ...segment, usageHint: "Used in Math mode sessions" })) }] : []),
 	];
 }
 

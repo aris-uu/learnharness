@@ -332,7 +332,7 @@ function QuestionDockForm({
 			// client before answering) and snapshots into the answer at submit.
 			// One field, reasoning included — no separate explanation
 			// (owner ruling 2026-09-27).
-			q.committedAnswer = explainInput.correctAnswer;
+			if (explainInput.conceal !== true) q.committedAnswer = explainInput.correctAnswer;
 		}
 		return q;
 	}, [toolCallId, kind, input]);

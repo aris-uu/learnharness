@@ -18,15 +18,15 @@ function createCollection() {
 	return collection;
 }
 
-test("lists exactly the opus, sonnet and haiku aliases", () => {
+test("lists exactly the fable, opus, sonnet and haiku aliases", () => {
 	const models = createCollection().getModels(CLAUDE_CODE_PROVIDER);
 	assert.deepEqual(
 		models.map((m) => m.id),
-		["opus", "sonnet", "haiku"],
+		["fable", "opus", "sonnet", "haiku"],
 	);
 	assert.deepEqual(
 		models.map((m) => m.name),
-		["Claude Opus", "Claude Sonnet", "Claude Haiku"],
+		["Claude Fable", "Claude Opus", "Claude Sonnet", "Claude Haiku"],
 	);
 });
 

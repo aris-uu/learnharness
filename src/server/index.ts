@@ -34,7 +34,7 @@ export { isValidSegmentPath } from "../core/prompt-segments.ts";
 // The canonical segment discovery/resolution lives in the agent layer
 // (composition is an agent concern); the barrel re-exports it for the
 // routes — server→agent is the lawful direction (chat-handler precedent).
-export { effectivePromptSegments, allSegmentPaths, readPromptOverride } from "../agent/prompt-segments.ts";
+export { effectivePromptSegments, effectiveProfileSegments, allSegmentPaths, readPromptOverride } from "../agent/prompt-segments.ts";
 
 // The auth/keys composition (auth-keys wave, 2026-09-19): the curated
 // key catalog + the env-reflecting store behind GET/PUT/DELETE /api/keys.
@@ -65,3 +65,4 @@ export { claudeCodeInstallationResponse } from "./claude-code.ts";
 // No import side effects; the boot sync lives in stores.ts.
 export * from "./custom-provider.ts";
 export { customProviderGet, customProviderMutation } from "./custom-provider-http.ts";
+export { MAX_PASTED_IMAGE_BYTES, pastedImageExtension, savePastedImage } from "./pasted-images.ts";

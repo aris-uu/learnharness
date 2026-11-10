@@ -77,6 +77,9 @@ import { capturePluginQuestionDismissal, confirmPluginQuestionDismissal, type Pl
 import { pendingPluginQuestionOf, pluginQuestionCallsOf } from "@/src/core";
 import { pluginQuestionOccurrenceKey, type PluginQuestionSnapshot } from "@/src/core";
 import type { PluginQuestionDraft } from "./session-core";
+import { GoBackMenu, SessionMathModeToggle, useSessionProfile } from "@/components/math-mode";
+import { goBackMessage } from "@/src/core";
+import { derivePlanStatuses, type PlanNode } from "@/src/core";
 import { SessionFind } from "@/components/session-find";
 import { SessionMessageNavigation } from "@/components/session-navigation";
 import { SelectionToolbar } from "@/components/selection-toolbar";
@@ -1267,6 +1270,19 @@ export function Chat({
 	// The session's live plan (drives the top-bar chip; the marginalia
 	// derives its own from the same transcript).
 	const planTree = useMemo(() => latestTree(messages), [messages]);
+	const planCurrent = useMemo(
+		() => (planTree ? derivePlanStatuses(planTree, messages as Parameters<typeof derivePlanStatuses>[1]).current : null),
+		[planTree, messages],
+	);
+	const [teachingProfile, setTeachingProfile] = useSessionProfile(chatId);
+	const goBackTo = useCallback(async (node: PlanNode) => {
+		const p = pendingRef.current;
+		if (p) {
+			const question = (p.input as { question?: string } | null)?.question ?? "";
+			await dismissQuestion(p.toolCallId, dismissedAnswer(toolQuestionKind(p.tool), question), p.key);
+		}
+		void send({ type: "text", text: goBackMessage(node) });
+	}, [dismissQuestion, send]);
 
 	// ── Session usage (wave-4 stats bar) ──
 	// The money channel: the record's turns log and read-time server Pi
@@ -1714,6 +1730,10 @@ export function Chat({
 							Plan
 						</button>
 </Hint>
+					)}
+					{kind !== "practice" && <SessionMathModeToggle chatId={chatId} profile={teachingProfile} onChange={setTeachingProfile} />}
+					{teachingProfile === "math" && planTree && (
+						<GoBackMenu tree={planTree} current={planCurrent} messages={nativeMessages} disabled={busy} onPick={(node) => void goBackTo(node)} />
 					)}
 					{/* The extraction ring (owner-locked redesign, 2026-09-24): fills
 					    with uncovered vs the chunk threshold, pulses while a run is in

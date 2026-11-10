@@ -5,7 +5,8 @@ import { providerEventObserver } from "./provider-events.ts";
 import type { Usage } from "@earendil-works/pi-ai";
 import { PATHS } from "../../config.ts";
 import { APP_IDENTITY, piEngineFor, type PiEngine } from "./models.ts";
-import { effectivePromptSegments } from "./prompt-segments.ts";
+import { effectivePromptSegments, profileFragments } from "./prompt-segments.ts";
+import type { TeachingProfile } from "../core/contracts/chat.ts";
 import {
 	askUserQuestionTool,
 	createProberTools,
@@ -84,11 +85,21 @@ export const CONVERSATION_TOOL_NAMES = Object.freeze([
  *  tests/prompt-overrides.test.ts). Overrides are a static-file read
  *  through config paths, not request state — the store import carries no
  *  chat/job machinery. */
-export function composeInstructions(kind: AgentKind, switches?: Record<string, boolean>): string {
+export function composeInstructions(kind: AgentKind, switches?: Record<string, boolean>, profile?: TeachingProfile): string {
 	const segments = effectivePromptSegments(kind, switches ?? {});
-	return segments
-		.map((s) => (s.enabled ? s.overrideText! : s.sourceText))
-		.map((t) => t.trim())
+	const entries = segments.map((s) => ({ path: s.path, text: s.enabled ? s.overrideText! : s.sourceText }));
+	if (profile && kind !== "practice") {
+		const fragments = profileFragments(kind, profile, switches ?? {});
+		for (const entry of entries) {
+			const replacement = fragments.get(entry.path);
+			if (replacement !== undefined) { entry.text = replacement; fragments.delete(entry.path); }
+		}
+		for (const [path, text] of fragments) entries.push({ path, text });
+		const rank = (p: string) => (p === "system-prompt.md" ? 0 : p.startsWith("shared/") ? 2 : 1);
+		entries.sort((a, b) => rank(a.path) - rank(b.path) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+	}
+	return entries
+		.map((s) => s.text.trim())
 		.filter(Boolean)
 		.join("\n\n---\n\n");
 }
@@ -148,6 +159,8 @@ export interface AgentBuildOptions {
 	 *  fresh per turn, honoring enabled overrides (switch on + file
 	 *  exists); absent → the cached pure-source composition. */
 	promptSwitches?: Record<string, boolean>;
+	/** The session's teaching profile: extra doctrine and tool rules, per turn. */
+	profile?: TeachingProfile;
 	/** Native conversation identity: the existing persisted chat id, reused
 	 * across reconstructed prober, teacher, and practice Agents.
 	 * Debug: when set AND LH_PROVIDER_EVENTS=1, raw provider stream events
@@ -211,8 +224,8 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 	const stopper = makeQuestionStopper(kind);
 	const narrationGuard = narrationGuardApplies(kind, engine.model, opts.tools !== undefined);
 	const narrationHooks = narrationGuard ? makeNarrationGuard() : undefined;
-	const composedPrompt = opts.promptSwitches
-		? composeInstructions(kind, opts.promptSwitches)
+	const composedPrompt = opts.promptSwitches || opts.profile
+		? composeInstructions(kind, opts.promptSwitches, opts.profile)
 		: composedInstructions[kind]!;
 	const builtinPrompt = narrationGuard ? `${composedPrompt}\n\n---\n\n${SEND_TO_USER_DELIVERY_RULE}` : composedPrompt;
 	// Bind native read and preserve the kind/model-aware Claude output gate
@@ -336,7 +349,7 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
  * handler keys teacher construction on.
  */
 export function createProberAgent(ctx: ProberToolContext, opts: AgentBuildOptions = {}) {
-	return baseAgentOptions("prober", opts, Object.values(createProberTools(ctx, opts.toolToggles)));
+	return baseAgentOptions("prober", opts, Object.values(createProberTools(ctx, opts.toolToggles, opts.profile)));
 }
 
 /**
@@ -352,7 +365,7 @@ export function createTeacherAgent(
 	ctx?: TeacherToolContext,
 	opts: AgentBuildOptions = {},
 ) {
-	const tools = opts.tools ?? (ctx ? createTeacherTools(ctx, opts.toolToggles) : bareQuestionTools());
+	const tools = opts.tools ?? (ctx ? createTeacherTools(ctx, opts.toolToggles, opts.profile) : bareQuestionTools());
 	return baseAgentOptions("teacher", opts, Object.values(tools), ctx
 		? nodeId => ctx.chatStore.getChat(ctx.chatId)?.tree?.nodes.some(node => node.id === nodeId) ?? false
 		: undefined);

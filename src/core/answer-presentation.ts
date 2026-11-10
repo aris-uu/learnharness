@@ -13,7 +13,7 @@ export function answerForPresentation(answer: QuestionAnswerData, input: unknown
 	if (!source) return answer;
 	const projected = { ...answer, questionText: source.question };
 	if (quiz) projected.explanation = quiz.explanation;
-	if (explain) projected.committed = explain.correctAnswer;
+	if (explain && explain.conceal !== true) projected.committed = explain.correctAnswer;
 	if (!answer.options?.length || !("options" in source) || !source.options?.length) return projected;
 
 	const original = normalizeOptions(source.options);

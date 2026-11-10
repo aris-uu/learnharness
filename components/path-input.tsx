@@ -4,6 +4,7 @@ import * as React from "react";
 import { createPortal } from "react-dom";
 import { FilePathChip } from "./file-path-chip";
 import { CitationChip } from "./citation-chip";
+import { uploadPastedImage } from "./pasted-image";
 import { cn } from "../lib/utils";
 import {
 	adjacentPathRange, atomicPathRange, clampPathSelection, insertCitation, insertFilePaths, locateToken,
@@ -217,8 +218,16 @@ export const PathInput = React.forwardRef<HTMLDivElement, PathInputProps>(functi
 			if (event.defaultPrevented) return;
 			event.preventDefault();
 			const text = event.clipboardData?.getData("text/plain") ?? "";
-			// Image/file/HTML-only clipboard contents are not text replacement.
-			if (text === "") return;
+			if (text === "") {
+				// A pasted picture joins the draft as an ordinary file path.
+				const image = Array.from(event.clipboardData?.items ?? []).find((item) => item.kind === "file" && item.type.startsWith("image/"))?.getAsFile();
+				if (image) {
+					uploadPastedImage(image)
+						.then((path) => { if (mounted) stage([path]); })
+						.catch(() => { if (mounted) replace("[image paste failed]"); });
+				}
+				return;
+			}
 			if (composing.current) pendingPaste.push(text);
 			else replace(text);
 		}

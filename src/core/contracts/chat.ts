@@ -67,7 +67,12 @@ export interface ChatSettings {
 	/** pi thinking level — must be in the chosen model's supported list
 	 *  (getSupportedThinkingLevels; enforced by the settings route). */
 	thinkingLevel?: ThinkingLevel;
+	/** The session's teaching profile; absent is the standard method. */
+	profile?: TeachingProfile;
 }
+
+export const TEACHING_PROFILES = ["math"] as const;
+export type TeachingProfile = (typeof TEACHING_PROFILES)[number];
 
 
 // ─── Background-extraction usage (the money channel, extraction side) ────────

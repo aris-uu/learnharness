@@ -317,6 +317,9 @@ export const explainInputBase = Type.Object({
 	details: Type.Optional(
 		Type.String({ description: "Optional extra context or instructions shown under the question." }),
 	),
+	conceal: Type.Optional(
+		Type.Boolean({ description: "True keeps correctAnswer hidden from the learner after submit, so the attempt can continue." }),
+	),
 });
 
 /** The TEACH-side explain object: base + the plan-position field (same
