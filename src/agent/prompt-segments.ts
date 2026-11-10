@@ -31,6 +31,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { PATHS, PROMPTS_OVERRIDE_DIR } from "../../config.ts";
 import { FRAGMENT_RE, isValidSegmentPath, type PromptAgent, type PromptSegmentInfo } from "../core/prompt-segments.ts";
+import { TEACHING_PROFILES } from "../core/contracts/chat.ts";
 
 const PROMPTS_DIR = path.join(PATHS.root, "src", "agent", "prompts");
 
@@ -124,11 +125,48 @@ export function effectivePromptSegments(
 	});
 }
 
+/** A profile's fragments, keyed by the segment path they replace or add.
+ *  profiles/<name>/ mirrors the agent and shared directories. */
+export function profileFragments(agent: PromptAgent, profile: string, switches: Record<string, boolean> = {}): Map<string, string> {
+	const fragments = new Map<string, string>();
+	for (const scope of [agent, "shared"]) {
+		for (const segment of profileScopeSegments(profile, scope, switches)) {
+			const file = path.posix.basename(segment.path);
+			fragments.set(`${scope}/${file}`, segment.enabled ? segment.overrideText! : segment.sourceText);
+		}
+	}
+	return fragments;
+}
+
+function profileScopeSegments(profile: string, scope: string, switches: Record<string, boolean>): PromptSegmentInfo[] {
+	const dir = path.join(PROMPTS_DIR, "profiles", profile, scope);
+	if (!fs.existsSync(dir)) return [];
+	return fs.readdirSync(dir).filter((f) => FRAGMENT_RE.test(f)).sort().map((file) => {
+		const segmentPath = `profiles/${profile}/${scope}/${file}`;
+		const overrideText = readPromptOverride(segmentPath);
+		return {
+			path: segmentPath,
+			sourceText: fs.readFileSync(path.join(dir, file), "utf-8"),
+			overrideText,
+			enabled: switches[segmentPath] === true && overrideText !== null,
+			shared: scope === "shared",
+		};
+	});
+}
+
+/** A profile's own segments, for the settings prompt editor. */
+export function effectiveProfileSegments(profile: string, switches: Record<string, boolean>): PromptSegmentInfo[] {
+	return ["teacher", "prober", "shared"].flatMap((scope) => profileScopeSegments(profile, scope, switches));
+}
+
 /** Every known segment path across both agents (route validation). */
 export function allSegmentPaths(): string[] {
 	const paths = new Set<string>();
 	for (const agent of ["prober", "teacher", "practice"] as const) {
 		for (const segment of listSourceSegments(agent)) paths.add(segment.path);
+	}
+	for (const profile of TEACHING_PROFILES) {
+		for (const segment of effectiveProfileSegments(profile, {})) paths.add(segment.path);
 	}
 	return [...paths].sort();
 }

@@ -658,7 +658,7 @@ describe("explainInputBase / explainInputProblems (the commitment contract)", ()
 		// The MC quiz's explanation/answer split was quiz baggage: free
 		// recall commits a single correctAnswer, reasoning included.
 		const keys = Object.keys(explainInputBase.properties);
-		assert.deepEqual(keys, ["question", "correctAnswer", "details"]);
+		assert.deepEqual(keys, ["question", "correctAnswer", "details", "conceal"]);
 	});
 
 	it("the teach object LEADS with the required pair (type, nodeId) — base fields follow", () => {

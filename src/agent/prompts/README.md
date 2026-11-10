@@ -17,6 +17,10 @@ The side-question base is not an editable segment (it is not listed in Settings)
 
 Practice has its own base and doctrine. Its shared appendix is explicitly allowlisted in the loader: `10-voice.md`, `15-accuracy.md`, `16-mental-model.md`, `35-side-conversations.md` and `40-formatting.md`, in sorted order. Other shared fragments do **not** automatically enter practice. Adding a new shared fragment includes it in prober/teacher composition, but not practice unless the allowlist changes.
 
+## Teaching profiles
+
+A session with `settings.profile` composes `profiles/<name>/`, which mirrors the agent and `shared/` directories. A profile file replaces the segment with the same path, and takes precedence over any user override of that standard segment. Profile segments appear under their own heading in Settings, and can be overridden there under the key `profiles/<name>/<scope>/<file>`. Other profile files are added in sorted position. Practice ignores profiles. See [Math mode](../../../docs/math-mode.md).
+
 ## Overrides and defaults
 
 Source files are the default instructions. User override files mirror segment keys under [`PROMPTS_OVERRIDE_DIR`](../../../config.ts), normally `data/prompts/` (relocated by `LH_DATA_DIR`):

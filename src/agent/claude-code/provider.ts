@@ -18,6 +18,7 @@ const SHARED_MODEL_FIELDS = {
 } satisfies Omit<Model<Api>, "id" | "name">;
 
 export const CLAUDE_CODE_MODELS: readonly Model<Api>[] = [
+	{ ...SHARED_MODEL_FIELDS, id: "fable", name: "Claude Fable" },
 	{ ...SHARED_MODEL_FIELDS, id: "opus", name: "Claude Opus" },
 	{ ...SHARED_MODEL_FIELDS, id: "sonnet", name: "Claude Sonnet" },
 	{ ...SHARED_MODEL_FIELDS, id: "haiku", name: "Claude Haiku" },

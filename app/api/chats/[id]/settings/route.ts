@@ -7,6 +7,7 @@ import {
 	validateChatSettings,
 } from "@/src/server";
 import type { ChatSettings } from "@/src/core";
+import { TEACHING_PROFILES, type TeachingProfile } from "@/src/core";
 
 /**
  * The per-chat model control (model-control wave): replace-whole settings —
@@ -43,6 +44,26 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
 	// level never rejects — it clamps to the named model's nearest
 	// supported (body model, else the record's strong slot).
 	const settings = clampChatLevel(parsed.settings, effectiveSettings().models.strong);
+	// The profile has its own writer below; a model pick must not clear it.
+	const profile = getChat(id)?.settings?.profile;
+	const merged: ChatSettings = profile ? { ...settings, profile } : settings;
+	stores.chatStore.saveSettings(id, merged);
+	return Response.json({ settings: merged });
+}
+
+/** Turns a teaching profile on (name) or off (null) for this session. */
+export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
+	const { id } = await params;
+	const chat = getChat(id);
+	if (!chat) return Response.json({ error: "Not found" }, { status: 404 });
+	if (chat.kind === "practice") return Response.json({ error: "Practice sessions have no teaching profile" }, { status: 400 });
+	const body = (await req.json().catch(() => null)) as { profile?: unknown } | null;
+	const requested = body?.profile;
+	if (requested !== null && !TEACHING_PROFILES.includes(requested as TeachingProfile)) {
+		return Response.json({ error: `profile must be null or one of: ${TEACHING_PROFILES.join(", ")}` }, { status: 400 });
+	}
+	const { profile: _previous, ...rest } = chat.settings ?? {};
+	const settings: ChatSettings = requested === null ? rest : { ...rest, profile: requested as TeachingProfile };
 	stores.chatStore.saveSettings(id, settings);
 	return Response.json({ settings });
 }
