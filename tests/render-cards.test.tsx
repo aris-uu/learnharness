@@ -25,6 +25,7 @@ import type { JobRecord } from "../src/core/contracts.ts";
 import { AnsweredCard } from "../components/answered-card.tsx";
 import {
 	buildAnswer,
+	dismissedAnswer,
 	normalizeOptions,
 	resolveCorrect,
 	questionNeedsReveal,
@@ -287,6 +288,16 @@ describe("render smoke tests", () => {
 		assert.match(html, /70%/);
 		// It is a RECORD, not a control — no range input on the card.
 		assert.ok(!html.includes('type="range"'));
+	});
+
+	it("AnsweredCard shows the answer timer's time (m:ss) — and nothing on older records", () => {
+		const timed = renderToStaticMarkup(<AnsweredCard answer={buildAnswer(quizQD(), { values: ["Venus"], elapsedSeconds: 83 })} />);
+		assert.match(timed, /data-testid="answered-elapsed"[^>]*>1:23</);
+		const old = renderToStaticMarkup(<AnsweredCard answer={buildAnswer(quizQD(), { values: ["Venus"] })} />);
+		assert.ok(!old.includes("answered-elapsed"));
+		const skipped = renderToStaticMarkup(<AnsweredCard answer={dismissedAnswer("quiz", "Pick one", 3_725)} />);
+		assert.match(skipped, /skipped/);
+		assert.match(skipped, /1:02:05/);
 	});
 
 	it("AnsweredCard hides the rail where no confidence exists (IDK, older records)", () => {

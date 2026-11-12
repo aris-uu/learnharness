@@ -10,7 +10,7 @@ import { PathText } from "@/components/file-path-chip";
 import { cn } from "@/lib/utils";
 import { ToolContentResponse } from "@/components/ai-elements/message";
 import type { QuestionAnswerData } from "@/src/core";
-import { answeredOptionLetters, answerForPresentation, parseAskInput, parseQuizInput } from "@/src/core";
+import { answeredOptionLetters, answerForPresentation, formatElapsed, parseAskInput, parseQuizInput } from "@/src/core";
 import { useAppearance } from "@/components/settings/appearance";
 import { questionCardLabel, questionCardStandIn } from "@/components/question-dock";
 import {
@@ -123,10 +123,13 @@ export function AnsweredCard({ answer: savedAnswer, input, toolCallId }: { answe
 		? { gridTemplateColumns: `minmax(0, 1fr) calc(${columns.answer}px - ${ANSWER_COLUMN_INSET_CSS})`, columnGap: COLUMN_GAP_CSS }
 		: undefined;
 
+	// The answer timer's record (owner 2026-11-12): active time, m:ss.
+	const elapsed = typeof answer.elapsedSeconds === "number" ? formatElapsed(answer.elapsedSeconds) : undefined;
 	if (answer.dismissed) {
 		return (
 			<div className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">
 				<span className="font-medium">{answer.questionText}</span> — skipped
+				{elapsed && <span data-testid="answered-elapsed" className="font-mono tabular-nums"> · {elapsed}</span>}
 			</div>
 		);
 	}
@@ -184,6 +187,15 @@ export function AnsweredCard({ answer: savedAnswer, input, toolCallId }: { answe
 					) : (
 						<StatusBadge text="incorrect" color="var(--lh-error)" />
 					))}
+				{elapsed && (
+					<span
+						data-testid="answered-elapsed"
+						title="Active time on this question"
+						className="ml-auto font-mono normal-case tracking-normal tabular-nums"
+					>
+						{elapsed}
+					</span>
+				)}
 			</div>
 			<div ref={questionTextRef} className="mb-3 font-medium">
 				<ToolContentResponse>{answer.questionText}</ToolContentResponse>

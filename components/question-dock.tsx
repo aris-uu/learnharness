@@ -12,6 +12,7 @@ import { PathInput, pathInputClassName } from "@/components/path-input";
 import { MalformedQuestion } from "@/components/malformed-question";
 import { ToolContentResponse } from "@/components/ai-elements/message";
 import { QuestionPreview } from "@/components/question-preview";
+import { AnswerTimerControls, useAnswerTimer } from "@/components/answer-timer";
 import { cn } from "@/lib/utils";
 import {
 	buildAnswer,
@@ -176,6 +177,9 @@ export interface QuestionDockProps {
 	viewReader?: ViewReaderRef<NativeQuestionViewState>;
 	toolName: "quiz" | "probe" | "ask_user_question" | "explain" | "recall";
 	toolCallId: string;
+	/** The pending question's key (PendingQuestion.key) — keys the answer
+	 *  timer's stored snapshot. Defaults to the toolCallId. */
+	questionKey?: string;
 	input: QuizToolInput | AskToolInput | ExplainToolInput;
 	/** Collapse state, owned by the DockOverlay (it drives the shell's height morph). */
 	expanded: boolean;
@@ -226,6 +230,7 @@ export function QuestionDock({
 	viewReader,
 	toolName,
 	toolCallId,
+	questionKey,
 	input,
 	expanded,
 	reveal = false,
@@ -287,6 +292,7 @@ export function QuestionDock({
 					viewReader={viewReader}
 					toolName={toolName}
 					toolCallId={toolCallId}
+					questionKey={questionKey}
 					input={parsed}
 					phase={phase}
 					active={expanded}
@@ -382,6 +388,7 @@ function QuestionDockForm({
 	viewReader,
 	toolName,
 	toolCallId,
+	questionKey,
 	input,
 	phase = "probe",
 	active,
@@ -480,6 +487,10 @@ function QuestionDockForm({
 	// between questions, so each question starts fresh at 50.
 	const [confIdx, setConfIdx] = useState<number>(initialDraft?.confidenceIndex ?? DEFAULT_CONFIDENCE_INDEX);
 	const selectMode: SelectMode = qd.mode === "multi-select" ? "multi-select" : "single-select";
+	// The answer timer (owner 2026-11-12): starts the first time the form
+	// is SHOWN (a teach check on reveal), survives scroll-collapse and
+	// reloads, stops only on the learner's Pause; read at capture time.
+	const timer = useAnswerTimer(questionKey ?? toolCallId, active === true);
 
 	// The PRIMARY dictation input (owner, STT round 1): while a question
 	// waits, dictated finals land HERE, never in the hidden composer — text
@@ -564,6 +575,7 @@ function QuestionDockForm({
 			// Always sent on quiz answers (owner: 50 must mean 50, never
 			// "untouched"); buildAnswer drops it on "I don't know".
 			confidence: kind === "quiz" ? CONFIDENCE_STOPS[confIdx] : undefined,
+			elapsedSeconds: timer.read(),
 		};
 		// Snapshot before optimistic submission unmounts the form. Ref values
 		// include the dictation finals that just landed, unlike stale closures.
@@ -893,9 +905,12 @@ function QuestionDockForm({
 	// shared by both arrangements; the refs feed the layout probe.
 	const questionPart = (
 		<div ref={questionPartRef} data-question-part="">
-			<div className={QC_LABEL}>
-				{questionCardLabel(toolName, kind, qd.questionType)}
-				{qd.mode === "multi-select" && " · select all that apply"}
+			<div className={cn(QC_LABEL, "flex items-center gap-2")}>
+				<span className="min-w-0 flex-1">
+					{questionCardLabel(toolName, kind, qd.questionType)}
+					{qd.mode === "multi-select" && " · select all that apply"}
+				</span>
+				<AnswerTimerControls timer={timer} />
 			</div>
 			<div className={QC_QUESTION}>
 				<ToolContentResponse>{qd.question}</ToolContentResponse>
