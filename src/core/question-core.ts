@@ -475,6 +475,10 @@ export interface QuestionAnswerData {
 	committed?: string; // explain only (rendering): the model's committed answer
 	explanation?: string; // quiz only (rendering)
 	dismissed?: boolean;
+	/** Active whole seconds on the question (owner 2026-11-12): from the
+	 *  first time it was shown to submit or dismissal, the learner's paused
+	 *  time excluded. Absent on old records. */
+	elapsedSeconds?: number;
 	answeredAt: string;
 }
 
@@ -497,6 +501,7 @@ export interface AnswerRequest {
 	thinking?: string; // the reasoning-on-the-question channel (was `note`)
 	readingThinking?: string; // the thinking-while-reading channel (check answers)
 	confidence?: number; // quiz only: 0-100 raw probability — 50 is a real coin flip, always sent (owner, 2026-10-01)
+	elapsedSeconds?: number; // the dock's answer timer: active whole seconds (owner, 2026-11-12)
 }
 
 /** The confidence slider's snap stops (owner, 2026-10-01): raw probability
@@ -723,6 +728,7 @@ export function buildAnswer(qd: QuestionData, req: AnswerRequest, tool?: string)
 		answers: [],
 		thinking: req.thinking?.trim() || undefined,
 		readingThinking: req.readingThinking?.trim() || undefined,
+		...elapsedField(req.elapsedSeconds),
 		answeredAt: new Date().toISOString(),
 	};
 	// resolve selected option values → OptionAnswer (in display order)
@@ -772,19 +778,27 @@ export function buildAnswer(qd: QuestionData, req: AnswerRequest, tool?: string)
  *  renders the question text + "skipped". Rides the same answer path —
  *  the teacher acknowledges the skip in its next turn, exactly like any
  *  answer. */
-export function dismissedAnswer(kind: QuestionKind, questionText: string): QuestionAnswerData {
+export function dismissedAnswer(kind: QuestionKind, questionText: string, elapsedSeconds?: number): QuestionAnswerData {
 	return {
 		kind,
 		questionText,
 		dontKnow: false,
 		answers: [],
 		dismissed: true,
+		...elapsedField(elapsedSeconds),
 		answeredAt: new Date().toISOString(),
 	};
 }
 
+/** The timer's whole seconds, sanitized — absent when unknown. */
+function elapsedField(seconds: number | undefined): { elapsedSeconds?: number } {
+	return typeof seconds === "number" && Number.isFinite(seconds) && seconds >= 0 ? { elapsedSeconds: Math.floor(seconds) } : {};
+}
+
 export function compactAnswerForModel(ad: QuestionAnswerData): Record<string, unknown> {
-	if (ad.dismissed) return { kind: ad.kind, dismissed: true };
+	// The answer timer rides every record that has it — dismissals too
+	// (owner 2026-11-12): how long he sat with it before skipping.
+	if (ad.dismissed) return { kind: ad.kind, dismissed: true, ...elapsedField(ad.elapsedSeconds) };
 	const out: Record<string, unknown> = { kind: ad.kind };
 	if (ad.dontKnow) out.dontKnow = true;
 	// Array.isArray: the seam is called with `unknown` answers (test
@@ -805,5 +819,6 @@ export function compactAnswerForModel(ad: QuestionAnswerData): Record<string, un
 	const thinking = ad.thinking ?? ad.note;
 	if (thinking) out.thinking = expandCitationsForModel(thinking);
 	if (ad.readingThinking) out.thinkingWhileReading = expandCitationsForModel(ad.readingThinking);
+	Object.assign(out, elapsedField(ad.elapsedSeconds));
 	return out;
 }

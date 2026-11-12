@@ -70,6 +70,7 @@ import { AbortTurnDialog, type AbortMode } from "@/components/abort-turn-dialog"
 import { ArrowRightIcon, DumbbellIcon, MessageCircleQuestionIcon, WaypointsIcon } from "lucide-react";
 import type { PlanBlockData } from "@/src/core";
 import { QuestionDock } from "@/components/question-dock";
+import { readAnswerTimerSeconds } from "@/components/answer-timer";
 import { PluginQuestionDock } from "./plugin-question-dock";
 import { PluginQuestionPart } from "./plugin-question-part";
 import { pluginQuestionKeySuppressed, composingQuestionKey } from "./plugin-question-keys";
@@ -517,7 +518,8 @@ export function Chat({
 				const reading = readingThinkingRef.current.trim() || undefined;
 				clearReadingThinking();
 				void closeSideThreadRef.current(); // its note lands after the skip
-				const answer = dismissedAnswer(toolQuestionKind(p.tool), question);
+				// The answer timer rides dismissals too (owner 2026-11-12).
+				const answer = dismissedAnswer(toolQuestionKind(p.tool), question, readAnswerTimerSeconds(p.key));
 				void dismissQuestion(
 					p.toolCallId,
 					reading ? { ...answer, readingThinking: reading } : answer,
@@ -722,8 +724,12 @@ export function Chat({
 	const prepareBuiltin: PrepareBuiltinSubmission = ({ question, capture, isCurrent }: BuiltinSubmissionCapture) => {
 		const target = builtinTarget(question), original = pending;
 		if (!target || !original || busyRef.current || compacting) return;
+		// The answer timer's seconds are host-owned (not part of the plugin
+		// submission contract): captured with the payload, re-attached below.
+		let elapsedSeconds: number | undefined;
 		void runSubmission(target, () => {
 			const raw = capture();
+			elapsedSeconds = raw.elapsedSeconds;
 			saveQuestionDraft(original.key, { readingThinking: readingThinkingRef.current });
 			return { type: "answer", answer: {
 				...(raw.dontKnow !== undefined ? { dontKnow: raw.dontKnow } : {}), ...(raw.values !== undefined ? { values: raw.values } : {}),
@@ -736,7 +742,7 @@ export function Chat({
 		}, async (prepared, attempt) => {
 			if (prepared.type !== "answer") return false;
 			const raw = validatePluginBuiltinSubmissionAnswer(question, prepared.answer);
-			const answer = buildAnswer(question, { ...raw, ...(prepared.thinking.text ? { thinking: prepared.thinking.text } : {}), ...(requiresReveal && prepared.readingThinking.text ? { readingThinking: prepared.readingThinking.text } : {}) }, original.tool);
+			const answer = buildAnswer(question, { ...raw, ...(elapsedSeconds !== undefined ? { elapsedSeconds } : {}), ...(prepared.thinking.text ? { thinking: prepared.thinking.text } : {}), ...(requiresReveal && prepared.readingThinking.text ? { readingThinking: prepared.readingThinking.text } : {}) }, original.tool);
 			const images = submissionImages(prepared, target.channels);
 			// Save newer native edits without changing the prepared payload.
 			capture(); saveQuestionDraft(original.key, { readingThinking: readingThinkingRef.current });
@@ -1279,7 +1285,7 @@ export function Chat({
 		const p = pendingRef.current;
 		if (p) {
 			const question = (p.input as { question?: string } | null)?.question ?? "";
-			await dismissQuestion(p.toolCallId, dismissedAnswer(toolQuestionKind(p.tool), question), p.key);
+			await dismissQuestion(p.toolCallId, dismissedAnswer(toolQuestionKind(p.tool), question, readAnswerTimerSeconds(p.key)), p.key);
 		}
 		void send({ type: "text", text: goBackMessage(node) });
 	}, [dismissQuestion, send]);
@@ -2916,6 +2922,7 @@ export function DockOverlay({
 									viewReader={nativeViewReader}
 									toolName={pending.tool as "quiz" | "probe" | "ask_user_question" | "explain" | "recall"}
 									toolCallId={pending.toolCallId}
+									questionKey={pending.key}
 									input={pending.input as never}
 									expanded={expanded}
 									reveal={revealPending}

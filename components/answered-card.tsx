@@ -10,7 +10,7 @@ import { PathText } from "@/components/file-path-chip";
 import { cn } from "@/lib/utils";
 import { ToolContentResponse } from "@/components/ai-elements/message";
 import type { QuestionAnswerData } from "@/src/core";
-import { answerForPresentation, parseAskInput, parseQuizInput } from "@/src/core";
+import { answerForPresentation, formatElapsed, parseAskInput, parseQuizInput } from "@/src/core";
 
 /**
  * Static rendering of an answered question (tool part in `output-available`).
@@ -25,10 +25,13 @@ import { answerForPresentation, parseAskInput, parseQuizInput } from "@/src/core
 export function AnsweredCard({ answer: savedAnswer, input }: { answer: QuestionAnswerData; input?: unknown }) {
 	const answer = answerForPresentation(savedAnswer, input);
 	const [whyOpen, setWhyOpen] = useState(false); // the tucked explanation (predictions, owner 2026-10-03)
+	// The answer timer's record (owner 2026-11-12): active time, m:ss.
+	const elapsed = typeof answer.elapsedSeconds === "number" ? formatElapsed(answer.elapsedSeconds) : undefined;
 	if (answer.dismissed) {
 		return (
 			<div className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">
 				<span className="font-medium">{answer.questionText}</span> — skipped
+				{elapsed && <span data-testid="answered-elapsed" className="font-mono tabular-nums"> · {elapsed}</span>}
 			</div>
 		);
 	}
@@ -88,6 +91,15 @@ export function AnsweredCard({ answer: savedAnswer, input }: { answer: QuestionA
 					) : (
 						<StatusBadge text="incorrect" color="var(--lh-error)" />
 					))}
+				{elapsed && (
+					<span
+						data-testid="answered-elapsed"
+						title="Active time on this question"
+						className="ml-auto font-mono normal-case tracking-normal tabular-nums"
+					>
+						{elapsed}
+					</span>
+				)}
 			</div>
 			<div className="mb-3 font-medium">
 				<ToolContentResponse>{answer.questionText}</ToolContentResponse>

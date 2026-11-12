@@ -552,6 +552,30 @@ describe("compactAnswerForModel", () => {
 		assert.deepEqual(compact, { kind: "ask", text: "lateral thinking" });
 	});
 
+	it("elapsedSeconds: the answer timer rides answers, don't-knows and dismissals", () => {
+		const ad = buildAnswer(quizData(), { values: ["mercury"], confidence: 70, elapsedSeconds: 83.9 });
+		assert.equal(ad.elapsedSeconds, 83, "whole seconds on the record");
+		assert.equal(compactAnswerForModel(ad).elapsedSeconds, 83);
+		assert.deepEqual(compactAnswerForModel(buildAnswer(quizData(), { dontKnow: true, elapsedSeconds: 12 })), {
+			kind: "quiz",
+			dontKnow: true,
+			elapsedSeconds: 12,
+		});
+		assert.deepEqual(compactAnswerForModel(dismissedAnswer("explain", "Why?", 40)), {
+			kind: "explain",
+			dismissed: true,
+			elapsedSeconds: 40,
+		});
+	});
+
+	it("elapsedSeconds: absent or invalid → omitted (old records, unseen questions)", () => {
+		assert.ok(!("elapsedSeconds" in buildAnswer(quizData(), { values: ["mercury"] })));
+		assert.ok(!("elapsedSeconds" in buildAnswer(quizData(), { values: ["mercury"], elapsedSeconds: -3 })));
+		assert.ok(!("elapsedSeconds" in buildAnswer(quizData(), { values: ["mercury"], elapsedSeconds: Number.NaN })));
+		assert.ok(!("elapsedSeconds" in dismissedAnswer("ask", "Pick")));
+		assert.equal(compactAnswerForModel(buildAnswer(quizData(), { values: ["mercury"], elapsedSeconds: 0 })).elapsedSeconds, 0);
+	});
+
 	it("dismissed: a one-field record", () => {
 		const ad = { ...buildAnswer(quizData(), { dontKnow: true }), dismissed: true };
 		const compact = compactAnswerForModel(ad);
