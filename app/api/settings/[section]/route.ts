@@ -132,7 +132,7 @@ export async function PUT(request: Request, ctx: { params: Promise<{ section: st
 	// The agent section lands HEALED when orphaned prompt switches were
 	// found above (the healed copy) — after every write the record and
 	// file reality agree.
-	const sectionOut =
+	const parsedOut =
 		section === "chat"
 			? clampChatLevel(parsed.settings as ChatSettings, effectiveSettings().models.strong)
 			: section === "models"
@@ -140,6 +140,11 @@ export async function PUT(request: Request, ctx: { params: Promise<{ section: st
 				: section === "agent" && agentHealed
 					? agentHealed
 					: parsed.settings;
+	// MCP servers are written only through /api/mcp: an agent-section write
+	// carries the stored list over untouched (its parser ignores the key).
+	const sectionOut = section === "agent" && record.agent?.mcpServers
+		? { ...(parsedOut as AgentSettings), mcpServers: record.agent.mcpServers }
+		: parsedOut;
 
 	// Read-modify-write ONE section of the record; everything else rides
 	// along untouched (other sections, unknown keys — sanitize preserves).

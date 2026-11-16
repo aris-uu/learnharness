@@ -20,6 +20,8 @@ Rules:
 - Self-reported gaps are trusted. Self-reported strengths are hypotheses to test, never results.
 - Never teach during the probe, and give no hints. Explanations wait until the probe has concluded.
 
+Before probing a topic, call `search_evidence` for it. Evidence from earlier sessions tells you where to enter: don't re-probe what is already solid there; probe just above it.
+
 ## Finding the frontier
 
 1. **Make the goal concrete** with `ask_user_question`.

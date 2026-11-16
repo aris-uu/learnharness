@@ -147,6 +147,9 @@ export interface AgentBuildOptions {
 		questionTypes?: readonly NativePluginQuestionContribution[];
 		problemTypes?: readonly NativePluginProblemContribution[];
 	};
+	/** Custom MCP servers' tools, by agent (server/mcp.ts mcpToolsForTurn).
+	 *  Added after the builtins; ignored when `tools` is explicit. */
+	mcpTools?: Partial<Record<AgentKind, AgentTool<any>[]>>;
 	/** The resolved per-user tool toggles (core/pending EnabledTools — the
 	 *  2026-09-19 P2 bridge: Platform's chat-handler passes
 	 *  effective.agent.tools; the factories drop any tool explicitly false.
@@ -238,8 +241,12 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 			? [withArgumentHeal(sendToUserTool)]
 			: []),
 	];
+	// Custom MCP servers' tools for this agent (server/mcp.ts): additive, never
+	// replacing a builtin. Explicit test registries stay caller-owned.
+	const builtinNames = new Set<string>([...CONVERSATION_TOOL_NAMES, ...builtinTools.map(tool => tool.name)]);
+	const mcpTools = opts.tools === undefined ? (opts.mcpTools?.[kind] ?? []).filter(tool => !builtinNames.has(tool.name)) : [];
 	const contributions = opts.tools === undefined && opts.chatId && opts.pluginContributions
-		? opts.pluginContributions({ chatId: opts.chatId, agent: kind }, [...CONVERSATION_TOOL_NAMES, ...builtinTools.map(tool => tool.name)])
+		? opts.pluginContributions({ chatId: opts.chatId, agent: kind }, [...builtinNames, ...mcpTools.map(tool => tool.name)])
 		: undefined;
 	const questionLedger = contributions?.questionTypes?.length && opts.chatId
 		? new PluginQuestionLedger(contributions.questionTypes, opts.chatId, nodeExists) : undefined;
@@ -261,7 +268,7 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 			systemPrompt,
 			model: engine.model,
 			thinkingLevel: engine.level,
-			tools: contributions ? [...builtinTools, ...contributions.tools, ...(questionLedger?.tools ?? []), ...problemTools] : builtinTools,
+			tools: contributions ? [...builtinTools, ...mcpTools, ...contributions.tools, ...(questionLedger?.tools ?? []), ...problemTools] : [...builtinTools, ...mcpTools],
 			messages: opts.messages ?? [],
 		},
 		streamFn: engine.streamFn,

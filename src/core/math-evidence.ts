@@ -1,8 +1,9 @@
 /**
  * Math mode's evidence model. Competence is a vector, not one "held" flag:
  * recall (K), rationale (U), procedure (S) and proof (P) are credited
- * separately, and only from answers the learner produced. Everything here is
- * derived from the record; nothing is stored beside it.
+ * separately, and only from answers the learner produced. The per-chat gate is
+ * derived from the record; a copy of each entry also goes to the global
+ * evidence ledger (below) so later sessions can search it.
  */
 import type { PlanTree } from "./contracts/plan.ts";
 
@@ -168,6 +169,140 @@ export function mathPitch(evidence: readonly MathEvidence[]): MathPitch {
 	const credited = recent.filter(isCredited).length;
 	const rate = recent.length === 0 ? null : credited / recent.length;
 	return { graded: recent.length, credited, rate, stepDown: rate !== null && recent.length >= PITCH_MINIMUM && rate < MATH_PITCH_FLOOR };
+}
+
+// ─── the global evidence ledger ──────────────────────────────────────────────
+//
+// Evidence lives in each chat's record (the record_evidence calls above, which
+// the per-chat gate reads) AND, copied, in one global ledger so a later
+// session can find it. Plan node ids are per-chat slugs, so the ledger carries
+// the node's title and summary as recorded: cross-chat search matches on text.
+
+export const SEARCH_EVIDENCE_TOOL = "search_evidence";
+export const EVIDENCE_SEARCH_LIMIT = 20;
+
+/** One ledger line: a successful record_evidence call, with its chat and node text. */
+export interface EvidenceRecord extends MathEvidence {
+	chatId: string;
+	nodeTitle: string;
+	nodeSummary?: string;
+	/** ISO time the evidence was recorded. */
+	recordedAt: string;
+}
+
+/** The global ledger port (src/store/evidence.ts is the fs adapter). */
+export interface EvidenceStore {
+	/** True once the ledger file exists, even empty: backfill has run. */
+	exists(): boolean;
+	/** Every record, oldest first; a repeated id keeps its first line. */
+	list(): EvidenceRecord[];
+	append(record: EvidenceRecord): void;
+	/** Replace the whole ledger (backfill). */
+	replaceAll(records: readonly EvidenceRecord[]): void;
+	/** Drop one chat's records; returns how many were removed. */
+	removeChat(chatId: string): number;
+}
+
+/** A record for the ledger, with the node's text taken from the plan at hand. */
+export function evidenceRecord(
+	chatId: string,
+	entry: MathEvidence,
+	tree: PlanTree | undefined,
+	recordedAt: string,
+): EvidenceRecord {
+	const node = tree?.nodes.find((candidate) => candidate.id === entry.nodeId);
+	return {
+		...entry,
+		chatId,
+		nodeTitle: node?.title ?? entry.nodeId,
+		...(node?.summary ? { nodeSummary: node.summary } : {}),
+		recordedAt,
+	};
+}
+
+/** A chat's successful evidence as ledger records, timed by the calling message. */
+export function evidenceRecordsFromChat(chat: {
+	id: string;
+	messages: readonly unknown[];
+	tree?: PlanTree;
+	updatedAt?: string;
+}): EvidenceRecord[] {
+	const times = new Map<string, string>();
+	for (const raw of chat.messages as Array<RecordMessage & { timestamp?: unknown }>) {
+		const time = typeof raw?.timestamp === "number" ? new Date(raw.timestamp).toISOString() : undefined;
+		for (const call of toolCalls(raw)) if (time) times.set(String(call.id), time);
+	}
+	const fallback = chat.updatedAt ?? new Date(0).toISOString();
+	return evidenceFromMessages(chat.messages).map((entry) =>
+		evidenceRecord(chat.id, entry, chat.tree, times.get(entry.id) ?? fallback));
+}
+
+/**
+ * One-time seed of the ledger from every chat's successful record_evidence
+ * calls. Runs only while the ledger does not exist yet, and writes it even
+ * when empty, so it never runs twice. Returns the count, or null when skipped.
+ */
+export function backfillEvidence(
+	chatStore: {
+		listChats(): readonly { id: string }[];
+		getChat(id: string): { id: string; messages: readonly unknown[]; tree?: PlanTree; updatedAt?: string } | null;
+	},
+	evidenceStore: EvidenceStore,
+): number | null {
+	if (evidenceStore.exists()) return null;
+	const records: EvidenceRecord[] = [];
+	for (const summary of chatStore.listChats()) {
+		const chat = chatStore.getChat(summary.id);
+		if (chat) records.push(...evidenceRecordsFromChat(chat));
+	}
+	records.sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
+	evidenceStore.replaceAll(records);
+	return records.length;
+}
+
+function searchTerms(query: string): string[] {
+	const terms = query.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((term) => term.length >= 2);
+	return [...new Set(terms)];
+}
+
+export interface EvidenceSearchHit {
+	record: EvidenceRecord;
+	/** How many distinct query terms matched. */
+	score: number;
+	/** The node's status in its own chat, from that chat's ledger records. */
+	nodeStatus: MathNodeStatus;
+}
+
+/**
+ * Case-insensitive keyword search over node title, summary and note. Ranked
+ * by distinct terms matched, then newest first; the current chat is left out.
+ * Returns null when the query holds no searchable term.
+ */
+export function searchEvidence(
+	records: readonly EvidenceRecord[],
+	query: string,
+	excludeChatId: string,
+	limit = EVIDENCE_SEARCH_LIMIT,
+): EvidenceSearchHit[] | null {
+	const terms = searchTerms(query);
+	if (terms.length === 0) return null;
+	const byChat = new Map<string, EvidenceRecord[]>();
+	for (const record of records) {
+		if (record.chatId === excludeChatId) continue;
+		const list = byChat.get(record.chatId) ?? [];
+		list.push(record);
+		byChat.set(record.chatId, list);
+	}
+	const hits: EvidenceSearchHit[] = [];
+	for (const [, chatRecords] of byChat) {
+		for (const record of chatRecords) {
+			const text = `${record.nodeTitle}\n${record.nodeSummary ?? ""}\n${record.note}`.toLowerCase();
+			const score = terms.filter((term) => text.includes(term)).length;
+			if (score > 0) hits.push({ record, score, nodeStatus: nodeStatus(record.nodeId, chatRecords) });
+		}
+	}
+	hits.sort((a, b) => b.score - a.score || b.record.recordedAt.localeCompare(a.record.recordedAt));
+	return hits.slice(0, limit);
 }
 
 /** The learner's go-back request, as ordinary lesson text the tutor acts on. */
