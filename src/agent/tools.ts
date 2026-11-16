@@ -17,7 +17,8 @@ import type { JobRecord } from "../core/contracts.ts";
 import type { JobStore } from "../core/ports.ts";
 import { jobTools, type DemoInput, type PdfInput, type ResearchInput, type VisualInput } from "./tools/jobs.ts";
 import { planTools, type PlanToolContext } from "./tools/plan.ts";
-import { mathTeacherTools, requireConcealedAnswer } from "./tools/math.ts";
+import { mathTeacherTools, requireConcealedAnswer, searchEvidenceTool } from "./tools/math.ts";
+import type { EvidenceStore } from "../core/math-evidence.ts";
 import type { TeachingProfile } from "../core/contracts/chat.ts";
 import { probeDoneTool, type ProbeDoneContext } from "./tools/probe.ts";
 import { proberGraphTools } from "./tools/graph.ts";
@@ -279,6 +280,18 @@ export interface ProberToolContext extends ProbeDoneContext {
 	 *  master switch AND the agent.graphTools toggle (settings-resolution).
 	 *  Absent = the gate is closed, no map tools (tests drive this seam). */
 	graphStore?: GraphStore;
+	/** The global evidence ledger: present = search_evidence in math mode. */
+	evidenceStore?: EvidenceStore;
+}
+
+/** search_evidence for math mode, when the composition root wired the ledger. */
+function evidenceSearch(
+	ctx: { chatId: string; chatStore: PlanToolContext["chatStore"]; evidenceStore?: EvidenceStore },
+	profile?: TeachingProfile,
+): Record<string, AgentTool<any>> {
+	if (profile !== "math" || !ctx.evidenceStore) return {};
+	const tool = searchEvidenceTool({ chatId: ctx.chatId, chatStore: ctx.chatStore, evidenceStore: ctx.evidenceStore });
+	return { [tool.name]: tool };
 }
 
 /** The prober's tool set: probe quiz (no nodeId) + ask + the learner-fs
@@ -345,6 +358,7 @@ export function createProberTools(
 				...(ctx.graphStore
 					? proberGraphTools({ chatStore: ctx.chatStore, graphStore: ctx.graphStore })
 					: {}),
+				...evidenceSearch(ctx, profile),
 				...done,
 			},
 				withoutMechanics(enabled),
@@ -406,6 +420,9 @@ export interface TeacherToolContext extends PlanToolContext {
 	spawn: (job: JobRecord, input: ResearchInput | DemoInput | VisualInput | PdfInput) => void;
 	/** Retained search-status seam; research dispatch is available keylessly. */
 	searchAvailable?: () => boolean;
+	/** The global evidence ledger: record_evidence copies into it, and
+	 *  search_evidence reads it (math mode). Absent in bare tests. */
+	evidenceStore?: EvidenceStore;
 }
 
 /**
@@ -471,6 +488,7 @@ export function createTeacherTools(
 			// only, always on — it shows the learner their own file.
 			show_image: createShowImageTool(ctx),
 			...(math ? { [math.recordEvidence.name]: math.recordEvidence } : {}),
+			...evidenceSearch(ctx, profile),
 			...planTools(ctx),
 			...jobTools({ chatId: ctx.chatId, jobStore: ctx.jobStore, spawn: ctx.spawn, searchAvailable: ctx.searchAvailable }),
 		},

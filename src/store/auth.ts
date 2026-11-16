@@ -21,6 +21,7 @@ import { AUTH_FILE } from "../../config.ts";
 import type { AuthStore } from "../core/ports.ts";
 import { CUSTOM_PROVIDER } from "../core/auth-keys.ts";
 import { CUSTOM_AUTH_BINDING, parseCustomAuthBinding, type CustomAuthBinding } from "../core/custom-provider-auth.ts";
+import { MCP_SECRETS_RECORD, readMcpSecretsRecord, type McpServerSecrets } from "../core/mcp.ts";
 import { writeFileAtomicSync } from "./atomic-write.ts";
 
 /** The flat string→string map, or {} for absent/corrupt/non-object. */
@@ -81,6 +82,18 @@ function readCustomMap(): Record<string, unknown> {
 }
 function assertOrdinaryVar(name: string): void {
 	if (name === CUSTOM_AUTH_BINDING || name === CUSTOM_PROVIDER.envVar) throw new Error("Use the custom endpoint editor");
+	if (name === MCP_SECRETS_RECORD) throw new Error("Use the MCP servers editor");
+}
+/** Every MCP server's secrets (core/mcp.ts). An absent or corrupt record reads as none. */
+export function readMcpSecrets(): Record<string, McpServerSecrets> {
+	return readMcpSecretsRecord(readMap()[MCP_SECRETS_RECORD]);
+}
+/** Replace the MCP secrets record in one atomic write; never turns an unreadable file into {}. */
+export function writeMcpSecrets(secrets: Record<string, McpServerSecrets>): void {
+	const map = readCustomMap();
+	if (Object.keys(secrets).length === 0) delete map[MCP_SECRETS_RECORD];
+	else map[MCP_SECRETS_RECORD] = JSON.stringify(secrets);
+	writeMap(map);
 }
 /** One immutable file snapshot. Keyless callers never invoke fileKey(). */
 export function readCustomAuth() {

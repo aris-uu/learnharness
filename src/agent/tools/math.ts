@@ -5,11 +5,16 @@ import {
 	attemptedNodes,
 	blockingPrerequisites,
 	evidenceFromMessages,
+	evidenceRecord,
 	MATH_DIMENSIONS,
 	MATH_OUTCOMES,
+	MATH_STATUS_LABELS,
 	mathPitch,
 	nodeStatus,
 	RECORD_EVIDENCE_TOOL,
+	SEARCH_EVIDENCE_TOOL,
+	searchEvidence,
+	type EvidenceStore,
 	type MathEvidence,
 } from "../../core/math-evidence.ts";
 import type { LhMessage } from "../../core/native-messages.ts";
@@ -41,9 +46,49 @@ export function requireConcealedAnswer(tool: AgentTool<any>): AgentTool<any> {
 	};
 }
 
+/** What the evidence tools close over. `evidenceStore` absent = no global
+ *  ledger (tests): record_evidence still works, search_evidence is not offered. */
+export type MathToolContext = Pick<PlanToolContext, "chatId" | "chatStore"> & { evidenceStore?: EvidenceStore };
+
+const searchEvidenceInput = Type.Object({
+	query: Type.String({ minLength: 1, description: "Keywords for the topic, e.g. \"quadratic residues Legendre symbol\". Matched against node titles, summaries and evidence notes." }),
+});
+
+/** Search evidence recorded in the learner's OTHER sessions (math mode, prober and teacher). */
+export function searchEvidenceTool(ctx: MathToolContext & { evidenceStore: EvidenceStore }): AgentTool<typeof searchEvidenceInput> {
+	return {
+		name: SEARCH_EVIDENCE_TOOL,
+		label: SEARCH_EVIDENCE_TOOL,
+		description:
+			"Search mastery evidence recorded in the learner's earlier sessions (not this one). " +
+			"Keyword match over node title, summary and note; best matches first, newest first, at most 20. " +
+			"Each result gives the session, node, dimension (K/U/S/P), outcome, hints, note, date, and the node's status in that session.",
+		parameters: searchEvidenceInput,
+		execute: async (_toolCallId, input) => {
+			const hits = searchEvidence(ctx.evidenceStore.list(), input.query, ctx.chatId);
+			if (hits === null) return invalidInputResult(SEARCH_EVIDENCE_TOOL, ["query holds no searchable word (use words of two or more letters)."]);
+			const titles = new Map(ctx.chatStore.listChats().map((chat) => [chat.id, chat.title]));
+			const results = hits.map(({ record, nodeStatus: status }) => ({
+				session: titles.get(record.chatId) ?? record.chatId,
+				sessionId: record.chatId,
+				node: record.nodeTitle,
+				...(record.nodeSummary ? { nodeSummary: record.nodeSummary } : {}),
+				nodeStatusInSession: MATH_STATUS_LABELS[status],
+				dimension: record.dimension,
+				outcome: record.outcome,
+				hints: record.hints,
+				note: record.note,
+				recordedAt: record.recordedAt,
+			}));
+			const details = { query: input.query, count: results.length, results };
+			return { content: [{ type: "text", text: JSON.stringify(details) }], details };
+		},
+	};
+}
+
 /** The teacher's math tools. Evidence recorded during this run is kept here
  *  because the record may not hold it until the run settles. */
-export function mathTeacherTools(ctx: Pick<PlanToolContext, "chatId" | "chatStore">) {
+export function mathTeacherTools(ctx: MathToolContext) {
 	const thisRun: MathEvidence[] = [];
 	const readRecord = () => {
 		const record = ctx.chatStore.getChat(ctx.chatId);
@@ -94,6 +139,9 @@ export function mathTeacherTools(ctx: Pick<PlanToolContext, "chatId" | "chatStor
 			}
 			const saved: MathEvidence = { ...entry, id: toolCallId };
 			thisRun.push(saved);
+			// The chat record stays the gate's truth; a failed ledger copy is logged, not fatal.
+			try { ctx.evidenceStore?.append(evidenceRecord(ctx.chatId, saved, tree, new Date().toISOString())); }
+			catch (error) { console.error(`[evidence] ledger append failed for ${ctx.chatId}:`, error); }
 			const all = [...evidence, saved];
 			const pitch = mathPitch(all);
 			const result = {

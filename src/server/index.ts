@@ -65,4 +65,6 @@ export { claudeCodeInstallationResponse } from "./claude-code.ts";
 // No import side effects; the boot sync lives in stores.ts.
 export * from "./custom-provider.ts";
 export { customProviderGet, customProviderMutation } from "./custom-provider-http.ts";
+export { listMcpServers, createMcpServer, updateMcpServer, deleteMcpServer, mcpServerStatus, mcpToolsForTurn, type McpServerView } from "./mcp.ts";
+export type { McpServerStatus } from "./mcp-clients.ts";
 export { MAX_PASTED_IMAGE_BYTES, pastedImageExtension, savePastedImage } from "./pasted-images.ts";

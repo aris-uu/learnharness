@@ -111,3 +111,4 @@ export type * from "./plugin-ui.ts";
 export type * from "./plugin-tree.ts";
 export * from "./plugin-agents.ts";
 export * from "./math-evidence.ts";
+export * from "./mcp.ts";

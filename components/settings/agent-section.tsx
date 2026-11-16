@@ -81,6 +81,7 @@ import { SettingsGroup, SettingsRow, SettingsMenuTrigger, Toggle, CommitInput } 
 import { ModelMenuList, ThinkingMenuList } from "./model-menu";
 import { ChatGPTBackgroundAccess } from "./chatgpt-connection";
 import { NativeSubscriptionBackgroundAccess } from "./subscription-connections";
+import { McpServersGroup } from "./mcp-servers-group.tsx";
 
 /** One slot's display identity — the tier's roster as the row hint rides
  *  with the resolved default (owner: the hint ALWAYS names the default). */
@@ -996,6 +997,8 @@ export function AgentSection({
 					);
 				})()}
 			</SettingsGroup>
+
+			<McpServersGroup />
 
 			<SettingsGroup label="Context" testid="group-context">
 				<SettingsRow

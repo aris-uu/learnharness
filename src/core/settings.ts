@@ -37,6 +37,7 @@ import type { ChatSettings } from "./contracts/chat.ts";
 import { isSearchEngineId, type SearchEngineId } from "./search.ts";
 import { isDictationLanguage, type DictationLanguage } from "./dictation.ts";
 import { parseFileAccessSettings, type FileAccessSettings } from "./file-access.ts";
+import { sanitizeMcpServers, type McpServerSettings } from "./mcp.ts";
 import { COLOR_OVERRIDE_KEYS, isThemeId, type AppearanceColorOverrides } from "./themes.ts";
 
 /** The schema version this code understands. Bump ONLY for breaking shape
@@ -383,6 +384,9 @@ export interface AgentSettings {
 	 *  the current policy is read per new tool call/job start. Existing
 	 *  sensitive-location/credential denials always win, not a whole-data ban. */
 	fileAccess?: FileAccessSettings;
+	/** Custom MCP servers (core/mcp.ts). Written only through /api/mcp; the
+	 *  agent-section PUT carries the stored list over untouched. */
+	mcpServers?: McpServerSettings[];
 }
 
 /** Markdown-rendering knobs — the bare-bones set (owner decision). */
@@ -763,6 +767,8 @@ function sanitizeAgent(raw: Record<string, unknown>): AgentSettings {
 		const parsed = parseFileAccessSettings(raw.fileAccess);
 		out.fileAccess = parsed.ok ? parsed.settings : { restricted: true, folders: [] };
 	}
+	const mcpServers = sanitizeMcpServers(raw.mcpServers);
+	if (mcpServers?.length) out.mcpServers = mcpServers;
 	return out;
 }
 

@@ -20,7 +20,9 @@ Math mode is a per-session teaching profile for hard mathematics. It replaces re
 
 After a written attempt, the tutor calls `record_evidence` for each dimension shown: recall (K), rationale (U), procedure (S) or proof (P). A node is solid with K plus one of U, S or P, each with at most one hint. Credit requires a submitted attempt on that node, and a later `incorrect` reopens it.
 
-The gate blocks a question on a new node until its direct prerequisites are solid, `assumed` from direct probe evidence, or passed by `learner_override` when you explicitly chose to move on. Staying on a node or moving back is never blocked. Evidence is derived from the session record and adds no separate store.
+The gate blocks a question on a new node until its direct prerequisites are solid, `assumed` from direct probe evidence or from an earlier session, or passed by `learner_override` when you explicitly chose to move on. Staying on a node or moving back is never blocked. The gate reads the current session's record only.
+
+Each successful `record_evidence` call is also copied, with the node's title and summary, to a global ledger at `evidence/evidence.jsonl` in the data folder (for the desktop app, `%APPDATA%\LearnHarness\data` on Windows). The first start after upgrading seeds the ledger from your existing sessions. Deleting a session removes its lines. In math mode the prober and the tutor can call `search_evidence`, a keyword search over your other sessions' evidence, so they don't re-probe what is already solid.
 
 Below 70% credited over the recent attempts, `record_evidence` tells the tutor to step down instead of raising difficulty.
 
@@ -36,7 +38,8 @@ Paste a screenshot or photo into the composer or any answer field. It is saved u
 
 - Doctrine: [`src/agent/prompts/profiles/math/`](../src/agent/prompts/profiles/math/), where a file replaces the same-named segment or adds a new one.
 - Evidence rules: [`src/core/math-evidence.ts`](../src/core/math-evidence.ts).
-- Gate and tool: [`src/agent/tools/math.ts`](../src/agent/tools/math.ts).
+- Gate and tools: [`src/agent/tools/math.ts`](../src/agent/tools/math.ts).
+- Evidence ledger: [`src/store/evidence.ts`](../src/store/evidence.ts), backfill in [`src/server/evidence.ts`](../src/server/evidence.ts).
 - Interface: [`components/math-mode.tsx`](../components/math-mode.tsx).
 
 These enforce the structure: written answers, hidden commitments, credit rules and the gate. Whether a tutor actually earns each definition, and how it grades, remains prompt doctrine.

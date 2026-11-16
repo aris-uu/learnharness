@@ -34,6 +34,7 @@ import { collectToolCallIds } from "./pi/call-ids.ts";
 import { providerEventNote } from "../agent/provider-events.ts";
 import { effectiveSettings, stores } from "./stores.ts";
 import { getPluginAgentContributions, getPluginHost } from "./plugins.ts";
+import { mcpToolsForTurn } from "./mcp.ts";
 import { preparePluginQuestionSubmission, reconcilePluginQuestionCompatibility, type QuestionTypeResolver } from "./plugin-questions.ts";
 import { searchAvailable, searchProvider } from "./search.ts";
 import { prepareSubmissionImages, prepareSubmissionImageChannels, prepareProblemSubmissionImageChannels, submissionImagePolicyKey } from "./submission-images.ts";
@@ -435,6 +436,9 @@ export async function handleChatInput(
 			console.error("[plugins] Agent contributions unavailable:", error);
 		}
 	}
+	// Custom MCP servers connect (or reuse their connection) here, before the
+	// admission seam below; a failing server is logged and left out of the turn.
+	const mcpTools: AgentBuildOptions["mcpTools"] = buildAgent ? undefined : await mcpToolsForTurn();
 	const compactedRecord = stores.chatStore.getChat(chatId);
 	if (!compactedRecord) return Response.json({ error: "Unknown chat" }, { status: 404 });
 	record = compactedRecord;
@@ -674,6 +678,7 @@ export async function handleChatInput(
 	let pendingSideBudgetError: Error | undefined;
 	const agentOpts: AgentBuildOptions = {
 		pluginContributions,
+		mcpTools,
 		engine,
 		callPurpose,
 		requestCycle,
@@ -768,6 +773,7 @@ export async function handleChatInput(
 						// The registry drop's signal (2026-09-20): no live engine
 						// = no research tool in the teacher's registry.
 						searchAvailable,
+						evidenceStore: stores.evidenceStore,
 					},
 					agentOpts,
 				)
@@ -786,6 +792,7 @@ export async function handleChatInput(
 						// knowledge graph through tools when the gate opens —
 						// graph master switch AND the agent.graphTools toggle.
 						...(graphToolsEnabled(effective) ? { graphStore: stores.graphStore } : {}),
+						evidenceStore: stores.evidenceStore,
 					},
 					agentOpts,
 				);
