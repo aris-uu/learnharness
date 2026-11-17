@@ -60,7 +60,7 @@ class SessionsTest(unittest.TestCase):
     def cli(self, root, *args):
         return subprocess.run([sys.executable, "-B", str(SCRIPTS / "sessions.py"),
                                "--data-dir", str(root), *args], capture_output=True,
-                              text=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, check=False)
+                              text=True, encoding="utf-8", env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, check=False)
 
     def save(self, root, value, filename=None):
         folder = root / "chats"
@@ -84,7 +84,7 @@ class SessionsTest(unittest.TestCase):
         for summary in index["sessions"]:
             response = self.cli(GOLDEN, "read", summary["id"])
             self.assertEqual(response.returncode, 0, response.stderr)
-            raw = json.loads((GOLDEN / "chats" / f"{summary['id']}.json").read_text())
+            raw = json.loads((GOLDEN / "chats" / f"{summary['id']}.json").read_text(encoding="utf-8"))
             text = response.stdout
             for message in raw["messages"]:
                 self.assertIn(message["id"], text)
@@ -341,7 +341,7 @@ class SessionsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self.save(root, record())
-            self.save(root, record(session_id="future", version=2))
+            self.save(root, record(session_id="future", version=3))
             self.save(root, record(session_id="old", messages=[{"role": "assistant", "parts": []}]))
             (root / "chats" / "broken.json").write_text("{bad", encoding="utf-8")
             before = snapshot(root)

@@ -13,7 +13,7 @@ import argparse
 import json
 import re
 
-from _data import DataError, add_common_arguments, data_root, print_json, read_chat, read_json, safe_path
+from _data import DataError, add_common_arguments, data_root, print_json, read_chat, read_json, safe_path, ensure_utf8_output
 
 
 def warn(message):
@@ -248,6 +248,7 @@ def nonempty(value):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    ensure_utf8_output()
     add_common_arguments(parser)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("sessions", help="List birth sessions, most recently active first")
