@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from _data import DataError, add_common_arguments, data_root, print_json, read_chat, safe_path
+from _data import DataError, add_common_arguments, data_root, print_json, read_chat, safe_path, ensure_utf8_output
 
 QUESTION_TOOLS = {"quiz", "probe", "ask_user_question", "explain", "recall"}
 LEARNING_TOOLS = QUESTION_TOOLS | {"problem", "conclude", "probe_done", "plan_init", "research", "pdf", "visual", "demo"}
@@ -323,6 +323,8 @@ def _blocks(content: Any, role: str, message_index: int,
                 lines.append("Archival view: includes stored **teacher-authored** answer keys/committed/model solutions, even pending. Actual UI reveal/viewing is not established by this record; these are not learner answers. Authored options must not be mapped to shuffled display indexes.")
             elif name in OPERATION_TOOLS:
                 lines.append("Operational call (routine arguments omitted unless --include-operations).")
+            elif isinstance(name, str) and name.startswith("mcp_"):
+                lines.append("External tool from a user-configured MCP server; arguments follow, result below.")
             elif name not in LEARNING_TOOLS:
                 lines.append("Unsupported/unrendered tool semantics; raw stored fields follow.")
             lines.extend(_fields({k: v for k, v in block.items() if k not in {"type", "name", "id"}}))
@@ -364,7 +366,9 @@ def render_markdown(selection: dict[str, Any]) -> str:
                     lines.extend(["Additional model-facing answer content (may differ from the primary details snapshot; preserved, not reconciled):",
                                   *_blocks(message["content"], role, index, statuses)])
             else:
-                if tool_name not in LEARNING_TOOLS | OPERATION_TOOLS:
+                if tool_name and tool_name.startswith("mcp_"):
+                    lines.append("External MCP tool result (user-configured server).")
+                elif tool_name not in LEARNING_TOOLS | OPERATION_TOOLS:
                     lines.append("Unsupported/unrendered tool-result semantics; stored fields follow.")
                 if "content" in message:
                     lines.extend(_blocks(message["content"], role, index, statuses))
@@ -426,6 +430,7 @@ def list_sessions(root: Path) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    ensure_utf8_output()
     add_common_arguments(parser)
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("list", help="Index native sessions; explicitly report unreadable records")

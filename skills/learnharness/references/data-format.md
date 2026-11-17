@@ -2,8 +2,10 @@
 
 The files are the user's record, not an import format to rewrite. Work read-only.
 The bundled readers make common views convenient; they are not required for custom
-analysis. This reference describes native session/graph format **1**. An absent
-version stamp means v1. Older fields within that format are described below;
+analysis. This reference describes native session format **1** and **2** and graph
+format **1**. An absent version stamp means v1. Session v2 differs only in
+`sideChats` threads, which gained `contextSnapshot` (the frozen teacher-context
+cutoff), and per-message `requestId` and `pending`. Older fields within that format are described below;
 pre-native `parts`/UIMessage transcripts are a different, unsupported dialect.
 
 ## File map
