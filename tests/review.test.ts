@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import type { EvidenceRecord, EvidenceStore } from "../src/core/math-evidence.ts";
-import { ratingFor, reviewNodeIds, type ReviewEvent, type ReviewStore } from "../src/core/memory/review.ts";
+import { ratingFor, retryQueue, reviewNodeIds, type ReviewEvent, type ReviewStore } from "../src/core/memory/review.ts";
 import { phaseAt3Lh } from "../src/core/phases.ts";
 import type { LhMessage } from "../src/core/native-messages.ts";
 import type { PlanTree } from "../src/core/contracts/plan.ts";
@@ -44,6 +44,27 @@ describe("grade → rating", () => {
 describe("review slugs", () => {
 	it("uses the node's slug and suffixes repeats", () => {
 		assert.deepEqual([...reviewNodeIds(["a#compact", "b#compact", "c#Weird Id!"])], [["compact", "a#compact"], ["compact-2", "b#compact"], ["weird-id", "c#Weird Id!"]]);
+	});
+});
+
+describe("deferred retries", () => {
+	const ev = (itemId: string, minute: number, rating: 1 | 3, kind: "review" | "retry" = "review", over: Partial<ReviewEvent> = {}): ReviewEvent => ({
+		id: `${itemId}-${minute}`, itemId, chatId: "rev", at: iso(T0 + minute * 60_000), kind, rating,
+		dimension: "K", outcome: rating === 1 ? "incorrect" : "correct", hints: 0, question: "q", note: "n", ...over,
+	});
+	const picked = ["a", "b", "c", "d"];
+	it("an Again waits behind two other first attempts", () => {
+		assert.deepEqual(retryQueue([ev("a", 1, 1)], picked), { waiting: ["a"], ready: [], remaining: ["b", "c", "d"] });
+		assert.deepEqual(retryQueue([ev("a", 1, 1), ev("b", 2, 3)], picked).waiting, ["a"]);
+		assert.deepEqual(retryQueue([ev("a", 1, 1), ev("b", 2, 3), ev("c", 3, 3)], picked).ready, ["a"]);
+	});
+	it("is ready once nothing else is left, and done once retried", () => {
+		const events = [ev("a", 1, 3), ev("b", 2, 3), ev("c", 3, 3), ev("d", 4, 1)];
+		assert.deepEqual(retryQueue(events, picked).ready, ["d"]);
+		assert.deepEqual(retryQueue([...events, ev("d", 5, 3, "retry")], picked), { waiting: [], ready: [], remaining: [] });
+	});
+	it("never queues an item the learner said was not consolidated", () => {
+		assert.deepEqual(retryQueue([ev("a", 1, 1, "review", { noRetry: true })], picked).waiting, []);
 	});
 });
 
@@ -124,6 +145,18 @@ describe("reviewer tools", () => {
 		assert.deepEqual(review.tree!.edges, [{ from: "hausdorff", to: "compact" }]);
 		const forced = await call("pick_items", { itemIds: ["teach1#fresh"], override: true });
 		assert.equal(forced.isError, undefined);
+	});
+
+	it("record_review defers an Again's retry behind other items", async () => {
+		const { call, answer } = setup(T0 + 60 * DAY);
+		await call("pick_items", { itemIds: ["teach1#hausdorff", "teach1#compact"] });
+		answer("hausdorff", "x1");
+		const again = await call("record_review", { nodeId: "hausdorff", dimension: "K", outcome: "incorrect", hints: 0, question: "q1", note: "n" }, "g1");
+		assert.match(again.details.instruction, /do NOT retry yet/);
+		assert.deepEqual(again.details.retries, { waiting: ["hausdorff"], ready: [] });
+		answer("compact", "x2");
+		const next = await call("record_review", { nodeId: "compact", dimension: "K", outcome: "correct", hints: 0, question: "q2", note: "n" }, "g2");
+		assert.match(next.details.instruction, /deferred retry on hausdorff/, "nothing else is left, so the retry is ready");
 	});
 
 	it("record_review: needs a pick and an attempt; the first attempt moves the schedule, later ones are retries", async () => {

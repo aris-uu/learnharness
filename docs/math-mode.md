@@ -54,7 +54,7 @@ Every node with math-mode evidence gets a forgetting curve (FSRS-6, default para
 | correct, unaided | Good |
 | correct, unaided, ≥ 90% confident and within the expected time | Easy |
 
-Only the first attempt on an item in a session moves its schedule. After an Again the reviewer gives one short repair and one retry on a different question, which is logged but not scheduled; the item comes back no sooner than a day later. Reviews are appended to `memory/reviews.jsonl` in the data folder, and every curve is replayed from the evidence ledger plus that log. Review sessions extract nothing into the graph. Design and later phases: [retention-mode-plan.md](retention-mode-plan.md).
+Only the first attempt on an item in a session moves its schedule. After an Again the reviewer gives one short repair at once, but defers the retry until two other items have had their first attempt (or nothing else is left), so it measures retrieval rather than the repair. The retry is on a different question and is logged but not scheduled. An item the learner says was never consolidated is graded Again with `noRetry` and goes to a teach session instead; the item comes back no sooner than a day later. Reviews are appended to `memory/reviews.jsonl` in the data folder, and every curve is replayed from the evidence ledger plus that log. Review sessions extract nothing into the graph. Design and later phases: [retention-mode-plan.md](retention-mode-plan.md).
 
 ## Going back
 

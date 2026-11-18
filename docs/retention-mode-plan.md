@@ -135,7 +135,7 @@ Only the **first** attempt on an item in a session moves the schedule. The repai
   - **S**: a fresh small computation, writing the reductions out (H).
   - **P**: a blank-page proof of the key lemma, ≤ 10 min.
 - Aim at the item's last notes. If the history says "asserted V_x disjoint from K", the next P question should require exactly that step.
-- After an Again: one short repair, then one `retry` on a *different* question. If it still fails, offer "Open a teach session from this item": a new math-mode teach chat seeded with the item and its notes, reusing the Go back message pattern.
+- After an Again: one short repair, then one `retry` on a *different* question, deferred behind two other items (built 2026-11-18 after the first live review; `RETRY_GAP` in `src/core/memory/review.ts`). `noRetry` skips it when the learner says the item was never consolidated. If it still fails, offer "Open a teach session from this item": a new math-mode teach chat seeded with the item and its notes, reusing the Go back message pattern.
 
 **UI**
 

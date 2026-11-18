@@ -14,7 +14,7 @@ import { createTree } from "../../core/plan-tree.ts";
 import type { PlanEdge, PlanTree } from "../../core/contracts/plan.ts";
 import { dueAt, retrievabilityAt } from "../../core/memory/fsrs.ts";
 import { DEFAULT_DESIRED_RETENTION, memorySnapshot } from "../../core/memory/items.ts";
-import { RATING_LABELS, ratingFor, REVIEW_OUTCOMES, reviewCandidates, reviewNodeIds, type ReviewEvent, type ReviewStore } from "../../core/memory/review.ts";
+import { RATING_LABELS, ratingFor, REVIEW_OUTCOMES, retryQueue, RETRY_GAP, reviewCandidates, reviewNodeIds, type ReviewEvent, type ReviewStore } from "../../core/memory/review.ts";
 import { invalidInputResult } from "../tool-execute.ts";
 import type { PlanToolContext } from "./plan.ts";
 
@@ -56,6 +56,7 @@ const recordReviewInput = Type.Object({
 	question: Type.String({ minLength: 1, description: "The question you asked, in one line." }),
 	note: Type.String({ minLength: 1, description: "One line naming what was shown or what was missing." }),
 	habits: Type.Optional(Type.Array(literals(MATH_HABITS), { description: "When the attempt fell short: which recurring habit caused it." })),
+	noRetry: Type.Optional(Type.Boolean({ description: "The learner said this was never consolidated (or asked to skip it): no retry; it goes to a teach session instead." })),
 });
 
 /** The item behind each slug of this session's map, from the last successful pick_items call. */
@@ -158,7 +159,7 @@ export function reviewTools(ctx: ReviewToolContext) {
 		description:
 			"Grade the learner's written answer on a picked item. Report the outcome; the server sets the FSRS rating " +
 			"(incorrect, 2+ hints, or a load-bearing partial = Again; other partial, slow or 1 hint = Hard; clean = Good; clean, fast and ≥90% confident = Easy). " +
-			"Only the first attempt on an item in a session moves its schedule; later ones are logged as retries. Returns the rating, the next due date and what to do next.",
+			"Only the first attempt on an item in a session moves its schedule; later ones are logged as retries. After an Again the retry is deferred behind other items. Returns the rating, the next due date, the retry queue and what to do next.",
 		parameters: recordReviewInput,
 		executionMode: "sequential",
 		execute: async (toolCallId, input) => {
@@ -184,19 +185,37 @@ export function reviewTools(ctx: ReviewToolContext) {
 				...(input.expectedSeconds !== undefined ? { expectedSeconds: input.expectedSeconds } : {}),
 				question: input.question, note: input.note,
 				...(habits ? { habits } : {}),
+				...(input.noRetry && rating === 1 ? { noRetry: true } : {}),
 				...(before?.state ? { predicted: Math.round(retrievabilityAt(before.state, t) * 1000) / 1000 } : {}),
 			};
 			ctx.reviewStore.append(event);
 			const after = memorySnapshot(ctx.evidenceStore.list(), t, { reviews: [...reviews, event] }).find((item) => item.id === itemId);
 			const nextDue = after?.state ? new Date(dueAt(after.state, DEFAULT_DESIRED_RETENTION, retry ? undefined : rating)).toISOString() : undefined;
+			const slugs = picks()!;
+			const slugOf = new Map([...slugs].map(([slug, id]) => [id, slug]));
+			const queue = retryQueue([...reviews, event].filter((e) => e.chatId === ctx.chatId), [...slugs.values()]);
+			const names = (ids: readonly string[]) => ids.map((id) => slugOf.get(id) ?? id).join(", ");
+			const nextStep = queue.ready.length
+				? `Now ask the deferred retry on ${names(queue.ready.slice(0, 1))}: a DIFFERENT question from both earlier ones, with no reminder of the repair.`
+				: queue.remaining.length
+					? "Move to the next item."
+					: "All items and retries are done: close the session.";
 			const instruction = retry
 				? rating === 1
-					? "The retry also failed. Stop drilling this item: offer to open a teach session on it, then move to the next item."
-					: "Retry logged; it does not move the schedule. Move to the next item."
-				: rating === 1
-					? "Again: give one short repair aimed at the exact gap, then ask one retry on a DIFFERENT question about this item."
-					: "Move to the next item.";
-			return ok({ ok: true, rating: RATING_LABELS[rating], kind: event.kind, ...(nextDue ? { nextDue } : {}), instruction });
+					? `The retry also failed. Stop drilling this item: note it for a teach session (offer it in the closing summary). ${nextStep}`
+					: `Retry logged; it does not move the schedule. ${nextStep}`
+				: rating === 1 && event.noRetry
+					? `No retry: the learner says this isn't consolidated. Give at most a one-line pointer, note it for a teach session in the closing summary, and move on. ${nextStep}`
+					: rating === 1
+					? queue.ready[0] === itemId
+						? "Again: give one short repair aimed at the exact gap. Nothing is left to interleave, so then ask the retry: a DIFFERENT question about this item."
+						: `Again: give one short repair aimed at the exact gap now, but do NOT retry yet. The retry waits until ${RETRY_GAP} other items have been asked (or until none are left), so it tests retrieval rather than the repair you just gave. Then: ${nextStep}`
+					: nextStep;
+			return ok({
+				ok: true, rating: RATING_LABELS[rating], kind: event.kind, ...(nextDue ? { nextDue } : {}),
+				retries: { waiting: queue.waiting.map((id) => slugOf.get(id) ?? id), ready: queue.ready.map((id) => slugOf.get(id) ?? id) },
+				instruction,
+			});
 		},
 	};
 
