@@ -20,6 +20,7 @@ import {
 	type MathEvidence,
 } from "../../core/math-evidence.ts";
 import type { LhMessage } from "../../core/native-messages.ts";
+import { DEFAULT_DESIRED_RETENTION, memoryItemId, memorySnapshot } from "../../core/memory/items.ts";
 import { invalidInputResult } from "../tool-execute.ts";
 import type { PlanToolContext } from "./plan.ts";
 
@@ -67,12 +68,15 @@ export function searchEvidenceTool(ctx: MathToolContext & { evidenceStore: Evide
 		description:
 			"Search mastery evidence recorded in the learner's earlier sessions (not this one). " +
 			"Keyword match over node title, summary and note; best matches first, newest first, at most 20. " +
-			"Each result gives the session, node, dimension (K/U/S/P), outcome, hints, note, date, and the node's status in that session.",
+			"Each result gives the session, node, dimension (K/U/S/P), outcome, hints, note, date, the node's status in that session, " +
+			`and its memory: recall probability now from its forgetting curve, when it falls below ${DEFAULT_DESIRED_RETENTION}, and stale = solid there but likely forgotten since.`,
 		parameters: searchEvidenceInput,
 		execute: async (_toolCallId, input) => {
-			const hits = searchEvidence(ctx.evidenceStore.list(), input.query, ctx.chatId);
+			const records = ctx.evidenceStore.list();
+			const hits = searchEvidence(records, input.query, ctx.chatId);
 			if (hits === null) return invalidInputResult(SEARCH_EVIDENCE_TOOL, ["query holds no searchable word (use words of two or more letters)."]);
 			const titles = new Map(ctx.chatStore.listChats().map((chat) => [chat.id, chat.title]));
+			const memory = new Map(memorySnapshot(records, Date.now()).map((item) => [item.id, item]));
 			const results = hits.map(({ record, nodeStatus: status }) => ({
 				session: titles.get(record.chatId) ?? record.chatId,
 				sessionId: record.chatId,
@@ -85,11 +89,19 @@ export function searchEvidenceTool(ctx: MathToolContext & { evidenceStore: Evide
 				note: record.note,
 				...(record.habits ? { habits: record.habits } : {}),
 				recordedAt: record.recordedAt,
+				...memoryFields(memory.get(memoryItemId(record.chatId, record.nodeId))),
 			}));
 			const details = { query: input.query, count: results.length, results };
 			return { content: [{ type: "text", text: JSON.stringify(details) }], details };
 		},
 	};
+}
+
+/** An item's curve as search_evidence reports it. */
+function memoryFields(item: ReturnType<typeof memorySnapshot>[number] | undefined) {
+	if (!item) return {};
+	if (item.status === "unverified") return { memory: { unverified: true } };
+	return { memory: { recall: Math.round(item.retrievability * 100) / 100, dueAt: item.dueAt, stale: item.stale } };
 }
 
 /** The teacher's math tools. Evidence recorded during this run is kept here

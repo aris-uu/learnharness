@@ -83,19 +83,19 @@ FSRS-6 tracks **one schedule per item**. The K/U/S/P dimensions play the role th
 - **Desired retention defaults to 0.85**, not 0.90. Fresh tutor-made questions are harder than a fixed card, and each review costs a model call. It is a setting.
 - The default FSRS parameters were fit to flashcard data, so the predicted R is only a prior. Log predicted R on every review event. After about 200 reviews, compare predicted with observed pass rate, and later optimize `W` from the log. Nothing is lost by starting on the defaults.
 
-**Seeding** (backfill from `evidence/evidence.jsonl`, the same one-time pattern as `backfillEvidence`):
+**Seeding.** As built in phase 1, seeds are *derived on every read* from `evidence/evidence.jsonl` rather than written to `items.jsonl`, so there is no backfill and no new data file until reviews exist (phase 2 adds `reviews.jsonl` only). The table:
 
 | The node's final status in its teaching chat | Seed |
 |---|---|
-| solid, all credited dimensions unhinted | `seed` Good at the time of the last credited record |
-| solid, with hints | `seed` Hard |
+| solid, with an unhinted `correct` K and an unhinted `correct` U/S/P | `seed` Good at the time of the last credited record |
+| solid otherwise (a hint or a slow answer) | `seed` Hard |
 | in_progress (latest partial/incorrect) | `seed` Again, so it is due within about a day |
 | assumed only | item `unverified`, due now, low priority: verify once |
 | skipped (learner_override) | not seeded |
 
 Today's ledger would produce about 73 items. Most of the topology and G-bundles items are already overdue by any curve, which matches what the probes found.
 
-From then on, every new math-mode `record_evidence` call appends a `seed` event the first time an item gets credit, so retention works without manual steps.
+Because the seed is derived, every new math-mode `record_evidence` call is picked up on the next read, so retention works without manual steps.
 
 ## 5. Mapping grades to FSRS ratings
 
@@ -164,7 +164,7 @@ Only the **first** attempt on an item in a session moves the schedule. The repai
 3. Doctrine: a stuck-point request on idk; the pre-submit checklist shown before P questions; the hypothesis-drop family; a soft re-plan warning.
 
 **Phase 1: memory core (read only for you)**
-`src/core/memory/{fsrs,items,replay,rating}.ts`, `src/store/memory.ts`, backfill at startup, a `seed` event on new credit, `search_evidence` returning R/stale, and the Memory view. **You get the curves immediately**, before any review UI exists. Tests: FSRS against fixtures from the plugin's scheduler, replay determinism, the seeding table, and the rating table.
+**Built (2026-11-18):** `src/core/memory/fsrs.ts` (FSRS-6 with the ts-fsrs 5.2.3 defaults) and `src/core/memory/items.ts` (seeding, replay, snapshot, curve points), all derived from the ledger with no stored state; `search_evidence` returning `memory: {recall, dueAt, stale}` or `{unverified: true}`; prober/teacher doctrine to re-test stale items; and the read-only Memory view at `/memory` (sidebar → Memory) via `src/server/memory.ts` and `components/memory-view.tsx`. Tests: `tests/memory.test.ts`, `tests/render-memory-view.test.tsx`, and a case in `tests/evidence-ledger.test.ts`. `src/store/memory.ts` and the rating table move to phase 2, where reviews first exist.
 
 **Phase 2: review kind**
 `ChatKind` extension (with a reader fallback; the chat record version stays 2 if the reader tolerates unknown kinds, so check `chats.ts`), `src/agent/tools/review.ts`, `src/agent/prompts/review/*`, agent wiring in `teacher-agent.ts`/`tools.ts`, the new-session entry with the badge, and plan-tree tinting.

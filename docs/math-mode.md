@@ -39,6 +39,10 @@ When an attempt falls short, `record_evidence` can carry `habits`: tags for the 
 
 Before teaching after an "I don't know", the tutor asks once what you would try first and where it stops, so its hint can land on the exact step. It skips this when you say you have no starting point.
 
+### Memory: forgetting curves
+
+Every node with math-mode evidence gets a forgetting curve (FSRS-6, default parameters, 85% target recall). It is derived from the ledger each time it is read, so nothing extra is stored. A solid node starts at Good when it was reached without hints, otherwise at Hard; a node still in progress starts at Again; a node that was only assumed is *unverified*. `search_evidence` reports each result's `memory`: its recall now, when it is due, and `stale` when it was solid but has probably been forgotten. The prober and the tutor then re-test it with one short recall instead of assuming it. **Memory** in the sidebar lists the items most forgotten first, with a sparkline for each. Design and later phases: [retention-mode-plan.md](retention-mode-plan.md).
+
 ## Going back
 
 Once a plan exists, **Go back** in the top bar lists the current node's prerequisites, nearest first, with their evidence status. Choosing one sets aside any open question and asks the tutor to rebuild from there. You can also just ask in your own words.
