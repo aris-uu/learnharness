@@ -18,7 +18,9 @@ export const RATING_LABELS: Record<FsrsRating, string> = { 1: "Again", 2: "Hard"
  *  events move the schedule; a `retry` (a later attempt on the same item in
  *  the same session) is logged for the record but never replayed. */
 export interface ReviewEvent extends MemoryEvent {
-	kind: "review" | "retry";
+	/** review: the first attempt, moves the schedule. retry: after an Again.
+	 *  followup: a harder rung after a clean answer (the easy-to-hard ladder). */
+	kind: "review" | "retry" | "followup";
 	/** The record_review tool-call id. */
 	id: string;
 	/** The review session it happened in. */
@@ -78,7 +80,7 @@ export function isReviewEvent(value: unknown): value is ReviewEvent {
 	return !!r && typeof r === "object" &&
 		typeof r.id === "string" && typeof r.itemId === "string" && typeof r.chatId === "string" &&
 		typeof r.at === "string" && Number.isFinite(Date.parse(r.at)) &&
-		(r.kind === "review" || r.kind === "retry") &&
+		(r.kind === "review" || r.kind === "retry" || r.kind === "followup") &&
 		[1, 2, 3, 4].includes(r.rating as number) &&
 		(MATH_DIMENSIONS as readonly unknown[]).includes(r.dimension) &&
 		(REVIEW_OUTCOMES as readonly unknown[]).includes(r.outcome) &&
@@ -88,8 +90,16 @@ export function isReviewEvent(value: unknown): value is ReviewEvent {
 		(r.habits === undefined || (Array.isArray(r.habits) && r.habits.every((tag) => (MATH_HABITS as readonly unknown[]).includes(tag))));
 }
 
-/** A review session's title: one per day. */
-export const reviewTitle = (nowMs: number) => `Review ${new Date(nowMs).toISOString().slice(0, 10)}`;
+/** A review session's title: dated, numbered from the second one that day
+ *  (owner, 2026-11-18: several review sessions a day). */
+export function reviewTitle(nowMs: number, existingTitles: readonly string[] = []): string {
+	const base = `Review ${new Date(nowMs).toISOString().slice(0, 10)}`;
+	const taken = new Set(existingTitles);
+	if (!taken.has(base)) return base;
+	let n = 2;
+	while (taken.has(`${base} (${n})`)) n++;
+	return `${base} (${n})`;
+}
 
 /** A due item as `due_items` hands it to the tutor. */
 export interface ReviewCandidate {
@@ -107,12 +117,18 @@ export interface ReviewCandidate {
 	habits: MathHabit[];
 	/** Direct prerequisites (same teaching session) that are also due. */
 	duePrereqs: string[];
+	/** Faded: solid when taught but now below target, or recall under 0.7. Start at the easiest rung. */
+	stale: boolean;
 	recentAgain: boolean;
 	/** No review event yet: everything known comes from the teaching session. */
 	firstReview: boolean;
 }
 
 const DAY_MS = 86_400_000;
+/** Below this recall an item counts as faded whatever its teaching status. */
+const STALE_RECALL = 0.7;
+/** How many harder rungs may follow a clean answer on one item in a session. */
+export const MAX_FOLLOW_UPS = 2;
 
 /**
  * The due items, ranked for the tutor to pick from (plan §6): shown items
@@ -155,6 +171,7 @@ export function reviewCandidates(input: {
 			habits,
 			duePrereqs: edges.filter((e) => e.to === item.nodeId && dueIds.has(sameChat(e.from))).map((e) => sameChat(e.from)),
 			recentAgain: lastReview?.rating === 1,
+			stale: item.stale || (item.state ? item.retrievability < STALE_RECALL : false),
 			firstReview: !ownReviews.some((r) => r.kind === "review"),
 			prereqOfDue: edges.some((e) => e.from === item.nodeId && dueIds.has(sameChat(e.to))),
 			unverified: !item.state,

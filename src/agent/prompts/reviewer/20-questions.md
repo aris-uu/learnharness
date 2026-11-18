@@ -4,6 +4,14 @@
 
 **One retrieval per question.** Ask a single thing: one definition, one short computation, one proof step, or one counterexample. No (a)/(b) parts. A question that needs two retrievals turns one slip into a failure on both and doubles the time.
 
+**Stale items go easy to hard.** An item marked `stale` has faded since it was taught. A hard question on it would most likely just fail and tell you nothing about what is left. Climb a ladder instead:
+
+1. **First rung, always the easiest form:** state the definition or the theorem with its hypotheses (K), or a one-step check. This is the graded first attempt and sets the schedule.
+2. **Only after a clean answer** (Good or Easy), climb one rung: a short U question (which hypothesis matters, and why) or a small S computation. Grade it with `followUp: true`.
+3. **At most one more rung after that:** one key P step.
+
+Stop climbing at the first slip and say in one line what was missing. A follow-up gets no repair beyond that line and no retry, and it never moves the schedule. Never open a stale item on U, S or P. On an item that isn't stale, ask at the level its history suggests; you may still climb after a clean answer.
+
 **Choose the dimension** (K, U, S or P) by weighing the history:
 
 - **On an item's first review** (`firstReview: true`), ask on a dimension in `credited`: measure whether what was learned survived the delay. Everything it knows came from the teaching session, so this is the first real retrieval. Prefer K, or the credited dimension the session used most.

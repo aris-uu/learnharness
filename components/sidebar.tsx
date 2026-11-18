@@ -62,7 +62,7 @@ const STORAGE_KEY = "lh:sidebar-open";
 import type { ChatGPTControlBridge, NativeSubscriptionControlBridge } from "@/src/core";
 import type { UpdateState } from "@/components/settings/update-settings.tsx";
 import { FilePathDropZone } from "@/components/file-path-drop-zone";
-import { startReview, useMemoryDue } from "@/components/start-review";
+import { NEW_REVIEW_HREF, useMemoryDue } from "@/components/start-review";
 const SIDEBAR_AUTOCLOSE = 928;
 
 // Module scope, guarded for SSR (the server has no navigator).
@@ -892,18 +892,18 @@ function SessionsSidebar() {
 						<span className="min-w-0 truncate">Practice</span>
 						<span className="sr-only">create a new practice session</span>
 					</button>
-						<button
-							type="button"
-							data-testid="new-session-review"
-							title="Review"
-							onClick={() => void startReview(fetch).then((target) => router.push(target)).catch(() => {})}
-							className="flex min-w-0 w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-						>
-							<BrainIcon className="size-3 shrink-0" />
-							<span className="min-w-0 truncate">Review</span>
-							{memoryDue ? <span className="ml-auto rounded-sm bg-accent px-1 font-mono text-[10px] normal-case tracking-normal text-foreground">{memoryDue}</span> : null}
-							<span className="sr-only">open today&apos;s review session</span>
-						</button>
+					<button
+						type="button"
+						data-testid="new-session-review"
+						title="Review"
+						onClick={() => router.push(NEW_REVIEW_HREF)}
+						className="flex min-w-0 w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+					>
+						<BrainIcon className="size-3 shrink-0" />
+						<span className="min-w-0 truncate">Review</span>
+						{memoryDue ? <span className="ml-auto rounded-sm bg-accent px-1 font-mono text-[10px] normal-case tracking-normal text-foreground">{memoryDue}</span> : null}
+						<span className="sr-only">create a new review session</span>
+					</button>
 				</PluginSidebarActions>
 
 				<div className="mx-3 mb-2 flex items-center gap-2">

@@ -1,7 +1,6 @@
 import { chainsForSelection, formatChainLine } from "@/src/core";
 import { newGraphContextMessage, type GraphContextPick } from "@/src/core";
-import { compactionInFlight, createChat, isTurnRunning, listChats, readSettingsRecord, stores, titleFromPrompt, todaysReviewChat } from "@/src/server";
-import { reviewTitle } from "@/src/core";
+import { compactionInFlight, createChat, isTurnRunning, listChats, nextReviewTitle, readSettingsRecord, stores, titleFromPrompt } from "@/src/server";
 import type { ChatListItem } from "@/src/core";
 
 /** The session picker's list: record-derived summaries (phase, pending
@@ -25,15 +24,10 @@ export async function POST(req: Request) {
 	const title = typeof body.title === "string" ? body.title : "";
 	// Practice sessions (owner, 2026-10-04): kind "practice" marks the
 	// record — the practice agent + its tools from turn 1, no extraction.
-	// Review sessions (retention mode, 2026-11-18): one per day, titled by
-	// date; asking again returns today's, flagged existing so the client
-	// opens it without resending an opening prompt.
+	// Review sessions (retention mode, 2026-11-18): titled by date, as many
+	// a day as the learner starts; the opening prompt is what they typed.
 	const kind = body.kind === "practice" ? ("practice" as const) : body.kind === "review" ? ("review" as const) : undefined;
-	if (kind === "review") {
-		const existing = todaysReviewChat();
-		if (existing) return Response.json({ id: existing, title: reviewTitle(Date.now()), existing: true });
-	}
-	const chat = createChat(kind === "review" ? reviewTitle(Date.now()) : titleFromPrompt(title || "Untitled session"), kind);
+	const chat = createChat(kind === "review" ? nextReviewTitle() : titleFromPrompt(title || "Untitled session"), kind);
 	// PER-SESSION MODELS (owner, 2026-09-28): a session owns its model +
 	// thinking level from birth — stamped verbatim from the STRONG slot,
 	// the new-session default. From here the strong slot never reaches

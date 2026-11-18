@@ -23,7 +23,8 @@ export const memoryItemId = (chatId: string, nodeId: string) => `${chatId}#${nod
 export interface MemoryEvent {
 	itemId: string;
 	at: string;
-	kind: "seed" | "review" | "retry";
+	/** seed and review move the schedule; retry and followup are logged only. */
+	kind: "seed" | "review" | "retry" | "followup";
 	rating: FsrsRating;
 }
 
@@ -103,7 +104,7 @@ export function seedFor(records: readonly EvidenceRecord[]): { status: MemoryIte
 export function replay(events: readonly MemoryEvent[]): FsrsState | undefined {
 	let state: FsrsState | null = null;
 	for (const event of [...events].sort((a, b) => ms(a.at) - ms(b.at))) {
-		if (event.kind === "retry") continue;
+		if (event.kind === "retry" || event.kind === "followup") continue;
 		const at = ms(event.at);
 		if (!Number.isFinite(at)) continue;
 		state = rateFsrs(state, event.rating, at);
@@ -162,7 +163,7 @@ export function snapshotItem(item: MemoryItem, nowMs: number, retention = DEFAUL
 		return { ...item, retrievability: 0, dueAt: new Date(nowMs).toISOString(), due: true, stale: false };
 	}
 	const r = retrievabilityAt(item.state, nowMs);
-	const lastRating = [...item.events].reverse().find((e) => e.kind !== "retry")?.rating;
+	const lastRating = [...item.events].reverse().find((e) => e.kind === "seed" || e.kind === "review")?.rating;
 	const due = dueAt(item.state, retention, lastRating);
 	return {
 		...item,
@@ -183,7 +184,7 @@ export function memorySnapshot(records: readonly EvidenceRecord[], nowMs: number
 /** Points of an item's recall curve from its first event to `untilMs`, for
  *  sparklines: `[epochMs, recall]`, with a vertical drop/rise at each review. */
 export function curvePoints(item: MemoryItem, untilMs: number, samplesPerSegment = 24): Array<[number, number]> {
-	const moving = item.events.filter((e) => e.kind !== "retry").sort((a, b) => ms(a.at) - ms(b.at));
+	const moving = item.events.filter((e) => e.kind === "seed" || e.kind === "review").sort((a, b) => ms(a.at) - ms(b.at));
 	const points: Array<[number, number]> = [];
 	let state: FsrsState | null = null;
 	for (let i = 0; i < moving.length; i++) {
