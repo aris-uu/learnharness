@@ -36,6 +36,8 @@ export interface ReviewEvent extends MemoryEvent {
 	habits?: MathHabit[];
 	/** Recall probability the schedule predicted just before this attempt. */
 	predicted?: number;
+	/** The learner said the item was never consolidated: no retry, it needs teaching. */
+	noRetry?: boolean;
 }
 
 /** Port for the review log (fs adapter: src/store/memory.ts). */
@@ -81,7 +83,7 @@ export function isReviewEvent(value: unknown): value is ReviewEvent {
 		(MATH_DIMENSIONS as readonly unknown[]).includes(r.dimension) &&
 		(REVIEW_OUTCOMES as readonly unknown[]).includes(r.outcome) &&
 		typeof r.hints === "number" && typeof r.question === "string" && typeof r.note === "string" &&
-		(r.loadBearing === undefined || typeof r.loadBearing === "boolean") &&
+		(r.loadBearing === undefined || typeof r.loadBearing === "boolean") && (r.noRetry === undefined || typeof r.noRetry === "boolean") &&
 		optionalNumber(r.confidence) && optionalNumber(r.elapsedSeconds) && optionalNumber(r.expectedSeconds) && optionalNumber(r.predicted) &&
 		(r.habits === undefined || (Array.isArray(r.habits) && r.habits.every((tag) => (MATH_HABITS as readonly unknown[]).includes(tag))));
 }
@@ -177,4 +179,38 @@ export function reviewNodeIds(itemIds: readonly string[]): Map<string, string> {
 		out.set(slug, itemId);
 	}
 	return out;
+}
+
+/** How many other items a retry waits behind after an Again, so it tests retrieval, not the repair still in working memory. */
+export const RETRY_GAP = 2;
+
+export interface RetryQueue {
+	/** Items rated Again whose retry has not been asked yet and should wait. */
+	waiting: string[];
+	/** Items rated Again whose retry is due now: they have waited RETRY_GAP items, or nothing else is left. */
+	ready: string[];
+	/** Picked items with no first attempt yet, in pick order. */
+	remaining: string[];
+}
+
+/**
+ * The session's deferred retries (owner, 2026-11-18: interleave before
+ * retrying). An Again is repaired at once, but its retry waits until
+ * RETRY_GAP other items have had their first attempt, or until no first
+ * attempts remain, so the retry measures retrieval after a delay.
+ */
+export function retryQueue(sessionEvents: readonly ReviewEvent[], picked: readonly string[], gap = RETRY_GAP): RetryQueue {
+	const events = [...sessionEvents].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+	const firsts = events.filter((e) => e.kind === "review");
+	const attempted = new Set(firsts.map((e) => e.itemId));
+	const retried = new Set(events.filter((e) => e.kind === "retry").map((e) => e.itemId));
+	const remaining = picked.filter((id) => !attempted.has(id));
+	const waiting: string[] = [];
+	const ready: string[] = [];
+	firsts.forEach((event, index) => {
+		if (event.rating !== 1 || event.noRetry || retried.has(event.itemId)) return;
+		const since = firsts.length - 1 - index;
+		(since >= gap || remaining.length === 0 ? ready : waiting).push(event.itemId);
+	});
+	return { waiting, ready, remaining };
 }
