@@ -59,7 +59,38 @@ const planInitInput = Type.Object({
 	}),
 });
 
-export function planTools(ctx: PlanToolContext): Record<string, AgentTool<any>> {
+/** Math mode's soft scope guard (2026-11-18): past this many nodes, or from
+ *  the third map of a session on, plan_init still succeeds but says so. The
+ *  2026-11 session analysis found math-mode goals receding as maps were
+ *  rebuilt finer and finer (one session: four maps, 35 nodes). */
+export const MATH_PLAN_NODE_SOFT_LIMIT = 15;
+export const MATH_PLAN_REWRITE_SOFT_LIMIT = 2;
+
+/** How many earlier plan_init calls in this record succeeded. */
+export function successfulPlanInits(messages: readonly unknown[]): number {
+	let count = 0;
+	for (const raw of messages as Array<{ role?: unknown; toolName?: unknown; isError?: unknown; details?: unknown }>) {
+		if (raw?.role !== "toolResult" || raw.toolName !== "plan_init" || raw.isError === true) continue;
+		if ((raw.details as { ok?: unknown } | undefined)?.ok === true) count++;
+	}
+	return count;
+}
+
+/** The math-mode scope warnings for a map about to be saved; empty when none. */
+export function mathPlanWarnings(nodeCount: number, earlierMaps: number): string[] {
+	const warnings: string[] = [];
+	if (nodeCount > MATH_PLAN_NODE_SOFT_LIMIT) {
+		warnings.push(`This map has ${nodeCount} nodes. A math-mode session goal should fit in about 6–${MATH_PLAN_NODE_SOFT_LIMIT}: ` +
+			"keep the path to the goal and leave the rest for a later session, telling the learner what was deferred.");
+	}
+	if (earlierMaps >= MATH_PLAN_REWRITE_SOFT_LIMIT) {
+		warnings.push(`This is map number ${earlierMaps + 1} for this session. Each rebuild moves the goal further away: ` +
+			"prefer inserting the one missing prerequisite on the current path, and ask the learner before widening the goal.");
+	}
+	return warnings;
+}
+
+export function planTools(ctx: PlanToolContext, options: { mathMode?: boolean } = {}): Record<string, AgentTool<any>> {
 	return {
 		plan_init: {
 			name: "plan_init",
@@ -87,6 +118,7 @@ export function planTools(ctx: PlanToolContext): Record<string, AgentTool<any>> 
 					// createTree validates the structure (duplicate ids, missing
 					// edge endpoints, self-loops, cycles → PlanTreeError).
 					const next = createTree(parsed.plan.nodes, parsed.plan.edges);
+					const warnings = options.mathMode ? mathPlanWarnings(next.nodes.length, successfulPlanInits(record.messages)) : [];
 					chatStore.saveTree(chatId, next);
 					// Context diet: content = the validated nodeIds + the reminder (the
 				// ids just became binding for every quiz/explain call); details =
@@ -97,6 +129,7 @@ export function planTools(ctx: PlanToolContext): Record<string, AgentTool<any>> 
 							ok: true,
 							nodeIds: next.nodes.map((n) => n.id),
 							reminder: PLAN_NODE_IDS_REMINDER,
+							...(warnings.length > 0 ? { scopeWarnings: warnings } : {}),
 						}),
 						details: { ok: true, tree: next },
 					};

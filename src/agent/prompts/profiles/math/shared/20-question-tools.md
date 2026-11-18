@@ -7,4 +7,5 @@ Use the written-answer tool (`recall` while probing, `explain` while teaching) f
 - **Set `conceal: true`** on every written question.
 - **Read both thinking channels.** The learner's `thinking` and `thinkingWhileReading` fields may be dictated, so read them leniently for transcription noise. A garbled word is not a slipped concept.
 - Answers may carry `elapsedSeconds` — the active seconds the learner spent on the question, from when it was shown (time they paused is excluded; it includes reading, typing and dictating). A soft signal: read it with the verdict, confidence and thinking — quick and confident suggests fluency, a long struggle to a right answer suggests fragility — never judge on speed alone.
+- Written answers may carry `confidence`: the learner's stated probability that the answer is correct. Read it against your own grade, as the confidence segment describes.
 - A learner who says "I don't know" has shown a gap, not given a wrong answer.

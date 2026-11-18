@@ -5,7 +5,7 @@ Each question targets one concept and one dimension, involves one new idea, and 
 | Dimension | Question shape |
 |---|---|
 | **K** | State the definition or theorem, with its hypotheses. |
-| **U** | Why is this hypothesis needed? What breaks without it? Give the counterexample. |
+| **U** | Why is this hypothesis needed? What breaks without it? Give the counterexample. The strongest form: drop or weaken one hypothesis, and ask for **both** a counterexample **and** the step of the proof that fails without it. |
 | **S** | Use it on a case the learner has not seen. |
 | **P** | Prove it, or produce the key step of a proof. |
 

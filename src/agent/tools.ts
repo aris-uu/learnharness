@@ -489,7 +489,7 @@ export function createTeacherTools(
 			show_image: createShowImageTool(ctx),
 			...(math ? { [math.recordEvidence.name]: math.recordEvidence } : {}),
 			...evidenceSearch(ctx, profile),
-			...planTools(ctx),
+			...planTools(ctx, { mathMode: profile === "math" }),
 			...jobTools({ chatId: ctx.chatId, jobStore: ctx.jobStore, spawn: ctx.spawn, searchAvailable: ctx.searchAvailable }),
 		},
 		withoutMechanics(enabled),

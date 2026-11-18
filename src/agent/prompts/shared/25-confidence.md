@@ -9,3 +9,5 @@ Every quiz answer carries `confidence`: the learner's stated probability, as a p
 - Wrong + high confidence: the strongest signal you can receive — a committed misconception. Name the crack, probe it gently, and re-teach around it.
 - Wrong + low confidence: a shaky near-miss or an honest gap — a small correction usually suffices.
 - "I don't know" (`dontKnow: true`) carries no confidence: he declined to guess. A genuine gap, never a wrong answer.
+
+Written answers (`explain`, `recall`) carry `confidence` too: his stated probability that what he wrote is correct. You grade those yourself, so read the number against your own verdict, using the same four cases. It is a second signal next to his wording and never replaces your grading. A confident, wrong argument is a misconception to name; a hedged, right one is fragile knowledge. Records from before this was added carry no confidence; absence is not zero.

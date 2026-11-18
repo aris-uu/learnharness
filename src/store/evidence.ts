@@ -8,7 +8,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { PATHS } from "../../config.ts";
-import { MATH_DIMENSIONS, MATH_OUTCOMES, type EvidenceRecord, type EvidenceStore } from "../core/math-evidence.ts";
+import { MATH_DIMENSIONS, MATH_HABITS, MATH_OUTCOMES, type EvidenceRecord, type EvidenceStore } from "../core/math-evidence.ts";
 import { writeFileAtomicSync } from "./atomic-write.ts";
 
 export const EVIDENCE_FILE = path.join(/* turbopackIgnore: true */ PATHS.data, "evidence", "evidence.jsonl");
@@ -20,7 +20,8 @@ function isRecord(value: unknown): value is EvidenceRecord {
 		typeof r.nodeTitle === "string" && (r.nodeSummary === undefined || typeof r.nodeSummary === "string") &&
 		(MATH_DIMENSIONS as readonly unknown[]).includes(r.dimension) &&
 		(MATH_OUTCOMES as readonly unknown[]).includes(r.outcome) &&
-		typeof r.hints === "number" && typeof r.note === "string" && typeof r.recordedAt === "string";
+		typeof r.hints === "number" && typeof r.note === "string" && typeof r.recordedAt === "string" &&
+		(r.habits === undefined || (Array.isArray(r.habits) && r.habits.every((tag) => (MATH_HABITS as readonly unknown[]).includes(tag))));
 }
 
 const serialize = (records: readonly EvidenceRecord[]) => records.map((record) => `${JSON.stringify(record)}\n`).join("");

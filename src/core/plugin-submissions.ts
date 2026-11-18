@@ -172,7 +172,7 @@ export function validatePluginBuiltinSubmissionAnswer(question: QuestionData, an
 	const raw = builtinAnswer(object(clonePluginQuestionJson(answer)));
 	const values = raw.values ?? [], other = raw.other?.trim() ?? "", text = raw.text?.trim() ?? "";
 	if (new Set(values).size !== values.length || values.some(value => !question.options.some(option => option.value === value))) throw new Error("Answer contains duplicate or unknown option values");
-	if (raw.confidence !== undefined && question.kind !== "quiz") throw new Error("Confidence is only applicable to quiz answers");
+	if (raw.confidence !== undefined && question.kind !== "quiz" && question.kind !== "explain") throw new Error("Confidence is only applicable to quiz and written answers");
 	if (question.mode === "text") {
 		if (values.length || other || raw.dontKnow === true) throw new Error("Selection fields are not applicable to text answers");
 		if (!text && !raw.images.length) throw new Error("Answer text or answer images are required");

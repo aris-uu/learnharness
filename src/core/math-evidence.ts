@@ -15,6 +15,28 @@ export type MathOutcome = (typeof MATH_OUTCOMES)[number];
 
 export const RECORD_EVIDENCE_TOOL = "record_evidence";
 
+/** Recurring proof/computation habits a grade can be tagged with (2026-11-18).
+ *  Tags name WHY an attempt fell short, so the same failure can be counted
+ *  across sessions instead of re-discovered. Doctrine: profiles/math/shared/25-habits.md. */
+export const MATH_HABITS = [
+	"unjustified_step",
+	"unchecked_membership",
+	"wrong_hypothesis",
+	"backward_only",
+	"dropped_term",
+	"unverified_candidate",
+	"incomplete_statement",
+	"arithmetic_slip",
+] as const;
+export type MathHabit = (typeof MATH_HABITS)[number];
+
+/** The valid, de-duplicated habit tags of a raw value; absent when none. */
+export function habitsOf(value: unknown): MathHabit[] | undefined {
+	if (!Array.isArray(value)) return undefined;
+	const tags = [...new Set(value.filter((tag): tag is MathHabit => (MATH_HABITS as readonly unknown[]).includes(tag)))];
+	return tags.length > 0 ? tags : undefined;
+}
+
 export interface MathEvidence {
 	id: string;
 	nodeId: string;
@@ -22,6 +44,8 @@ export interface MathEvidence {
 	outcome: MathOutcome;
 	hints: number;
 	note: string;
+	/** Why the attempt fell short, when it did (absent on old records). */
+	habits?: MathHabit[];
 }
 
 export type MathNodeStatus = "solid" | "conditional" | "skipped" | "in_progress" | "none";
@@ -68,6 +92,7 @@ export function evidenceFromMessages(messages: readonly unknown[]): MathEvidence
 			if (call.name !== RECORD_EVIDENCE_TOOL || !settled.has(call.id) || failed.has(call.id)) continue;
 			const input = (call.arguments ?? {}) as Record<string, unknown>;
 			if (!isEvidence(input)) continue;
+			const habits = habitsOf(input.habits);
 			out.push({
 				id: String(call.id),
 				nodeId: input.nodeId as string,
@@ -75,6 +100,7 @@ export function evidenceFromMessages(messages: readonly unknown[]): MathEvidence
 				outcome: input.outcome as MathOutcome,
 				hints: typeof input.hints === "number" ? input.hints : 0,
 				note: typeof input.note === "string" ? input.note : "",
+				...(habits ? { habits } : {}),
 			});
 		}
 	}

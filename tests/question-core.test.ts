@@ -475,8 +475,9 @@ describe("buildAnswer", () => {
 	});
 
 	// Confidence (owner, 2026-10-01): the slider's raw probability rides on
-	// real quiz answers only — never on "I don't know" (no answer, no
-	// probability), never on ask/explain. Clamped defensively.
+	// real quiz answers and (since 2026-11-18) written explain answers —
+	// never on "I don't know" (no answer, no probability), never on ask.
+	// Clamped defensively.
 	it("carries confidence on quiz answers and clamps out-of-range values", () => {
 		assert.equal(buildAnswer(quizData(), { values: ["mercury"], confidence: 90 }).confidence, 90);
 		assert.equal(buildAnswer(quizData(), { values: ["mercury"], confidence: 150 }).confidence, 100);
@@ -488,6 +489,14 @@ describe("buildAnswer", () => {
 		assert.equal(buildAnswer(quizData(), { dontKnow: true, confidence: 70 }).confidence, undefined);
 		const ask = quizData({ kind: "ask", correctIndices: undefined, explanation: undefined });
 		assert.equal(buildAnswer(ask, { other: "x", confidence: 70 }).confidence, undefined);
+	});
+
+	it("carries confidence on written explain answers, never on their dontKnow", () => {
+		const explain = quizData({ kind: "explain", mode: "text", options: [], correctIndices: undefined, explanation: undefined });
+		const ad = buildAnswer(explain, { text: "Because the kernel is trivial.", confidence: 70 });
+		assert.equal(ad.confidence, 70);
+		assert.equal(compactAnswerForModel(ad).confidence, 70);
+		assert.equal(buildAnswer(explain, { dontKnow: true, confidence: 70 }).confidence, undefined);
 	});
 
 	it("multi-select grades as exact-set", () => {
