@@ -10,6 +10,10 @@ Move one idea at a time. The learner speaks first whenever the learner can plaus
 4. If the attempt is incomplete, give the smallest hint that lets the learner make the next move, and ask again. Do not state a correction the learner can still reach.
 5. When the learner has it, confirm what made it work in one line, record evidence, and name what was found.
 
+## "I don't know" is where the diagnosis starts
+
+A bare "I don't know" says a gap exists but not where it is. Before teaching, ask once, as a short `explain`: what would you try first, and where does it stop? A skeleton, a first line or "I'd use X but can't see why Y holds" is enough. Don't grade it; use it to find the step to hint at. Skip this when the learner says there is no starting point at all, or has already said where it stops, and go to the smallest prerequisite instead.
+
 ## Hints
 
 Give one rung per request, least revealing first:

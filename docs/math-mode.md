@@ -15,6 +15,7 @@ Math mode is a per-session teaching profile for hard mathematics. It replaces re
 | Definitions | May be stated as starting points | Earned through examples, non-examples and your own attempt |
 | Probe | Enters near the top | Starts mid-chain at about 80% expected success; self-reports and the graph are not evidence |
 | Moving on | Follows the tutor's tags | A soft mastery gate checks direct prerequisites |
+| Plan size | Any | `plan_init` warns, without blocking, past 15 nodes or from the third map of a session |
 
 ## Evidence
 
@@ -25,6 +26,18 @@ The gate blocks a question on a new node until its direct prerequisites are soli
 Each successful `record_evidence` call is also copied, with the node's title and summary, to a global ledger at `evidence/evidence.jsonl` in the data folder (for the desktop app, `%APPDATA%\LearnHarness\data` on Windows). The first start after upgrading seeds the ledger from your existing sessions. Deleting a session removes its lines. In math mode the prober and the tutor can call `search_evidence`, a keyword search over your other sessions' evidence, so they don't re-probe what is already solid.
 
 Below 70% credited over the recent attempts, `record_evidence` tells the tutor to step down instead of raising difficulty.
+
+### Confidence on written answers
+
+Written answers (`explain`, `recall`) have the same confidence slider as quiz answers, in every session: your probability that what you wrote is correct. It is never sent with "I don't know". The tutor reads it against its own grade, so a confident wrong argument shows up as a misconception and a hesitant right one as fragile knowledge. Older written answers have no confidence. In written answers the slider is set with the mouse, because ←/→ move the caret in the answer field.
+
+### Habit tags
+
+When an attempt falls short, `record_evidence` can carry `habits`: tags for the recurring reason, chosen from `unjustified_step`, `unchecked_membership`, `wrong_hypothesis`, `backward_only`, `dropped_term`, `unverified_candidate`, `incomplete_statement` and `arithmetic_slip`. The tags are stored in the session and the global ledger, and returned by `search_evidence`. `record_evidence` reports the session's counts so far, so the tutor can aim a question at a habit once it has appeared twice. With the first P or U question of a session, the tutor also shows a five-point pre-submit checklist. Doctrine: [`profiles/math/teacher/12-habits.md`](../src/agent/prompts/profiles/math/teacher/12-habits.md).
+
+### "I don't know"
+
+Before teaching after an "I don't know", the tutor asks once what you would try first and where it stops, so its hint can land on the exact step. It skips this when you say you have no starting point.
 
 ## Going back
 

@@ -6,7 +6,9 @@ import {
 	blockingPrerequisites,
 	evidenceFromMessages,
 	evidenceRecord,
+	habitsOf,
 	MATH_DIMENSIONS,
+	MATH_HABITS,
 	MATH_OUTCOMES,
 	MATH_STATUS_LABELS,
 	mathPitch,
@@ -29,9 +31,12 @@ const recordEvidenceInput = Type.Object({
 	outcome: literals(MATH_OUTCOMES),
 	hints: Type.Integer({ minimum: 0, description: "How many hint rungs this answer needed. Zero when unaided." }),
 	note: Type.String({ minLength: 1, description: "One line naming what was shown or what was missing." }),
+	habits: Type.Optional(Type.Array(literals(MATH_HABITS), {
+		description: "When the attempt fell short (partial, incorrect, or credit that needed a hint): which recurring habit caused it. Omit when none applies.",
+	})),
 });
 
-type EvidenceInput = { nodeId: string; dimension: MathEvidence["dimension"]; outcome: MathEvidence["outcome"]; hints: number; note: string };
+type EvidenceInput = { nodeId: string; dimension: MathEvidence["dimension"]; outcome: MathEvidence["outcome"]; hints: number; note: string; habits?: unknown };
 
 const CONCEAL_PROBLEM = "Math mode keeps the committed answer hidden so the attempt can continue: set conceal to true.";
 
@@ -78,6 +83,7 @@ export function searchEvidenceTool(ctx: MathToolContext & { evidenceStore: Evide
 				outcome: record.outcome,
 				hints: record.hints,
 				note: record.note,
+				...(record.habits ? { habits: record.habits } : {}),
 				recordedAt: record.recordedAt,
 			}));
 			const details = { query: input.query, count: results.length, results };
@@ -137,17 +143,22 @@ export function mathTeacherTools(ctx: MathToolContext) {
 			if ((entry.outcome === "correct" || entry.outcome === "correct_slow") && !attemptedNodes(messages).has(entry.nodeId)) {
 				return invalidInputResult(RECORD_EVIDENCE_TOOL, [`No submitted written attempt exists on ${entry.nodeId}, so it cannot earn credit.`]);
 			}
-			const saved: MathEvidence = { ...entry, id: toolCallId };
+			const { habits: rawHabits, ...rest } = entry;
+			const habits = habitsOf(rawHabits);
+			const saved: MathEvidence = { ...rest, id: toolCallId, ...(habits ? { habits } : {}) };
 			thisRun.push(saved);
 			// The chat record stays the gate's truth; a failed ledger copy is logged, not fatal.
 			try { ctx.evidenceStore?.append(evidenceRecord(ctx.chatId, saved, tree, new Date().toISOString())); }
 			catch (error) { console.error(`[evidence] ledger append failed for ${ctx.chatId}:`, error); }
 			const all = [...evidence, saved];
 			const pitch = mathPitch(all);
+			const habitCounts: Record<string, number> = {};
+			for (const tag of all.flatMap((e) => e.habits ?? [])) habitCounts[tag] = (habitCounts[tag] ?? 0) + 1;
 			const result = {
 				ok: true,
 				nodeStatus: nodeStatus(entry.nodeId, all),
 				recentCredited: `${pitch.credited}/${pitch.graded}`,
+				...(Object.keys(habitCounts).length > 0 ? { sessionHabits: habitCounts } : {}),
 				instruction: pitch.stepDown
 					? "Recent success is below the target band. Do not raise difficulty: step down to the weakest prerequisite with a smaller written problem."
 					: "Stay near 80% success: one new idea at a time.",

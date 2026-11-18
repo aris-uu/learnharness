@@ -406,6 +406,9 @@ function QuestionDockForm({
 	onLayout,
 }: Omit<QuestionDockProps, "expanded" | "onExpand" | "reveal">) {
 	const kind = toolQuestionKind(toolName);
+	// The confidence slider rides on quiz AND written (explain) answers —
+	// written answers gained it 2026-11-18 so math mode keeps calibration.
+	const hasConfidence = kind === "quiz" || kind === "explain";
 	const controller = useOptionalInteractionLayers();
 	const rootRef = useRef<HTMLDivElement>(null);
 	const questionPartRef = useRef<HTMLDivElement>(null);
@@ -539,11 +542,11 @@ function QuestionDockForm({
 			return { question: qd, draft: { dontKnow: sel.dontKnow,
 				values: [...sel.selected].flatMap(index => qd.options[index] ? [qd.options[index]!.value] : []),
 				otherSelected: sel.otherSelected, other, text: answerTextRef.current, thinking: thinkingTextRef.current,
-				...(kind === "quiz" ? { confidence: CONFIDENCE_STOPS[confIdx] } : {}) } };
+				...(hasConfidence ? { confidence: CONFIDENCE_STOPS[confIdx] } : {}) } };
 		};
 		viewReader.current = read;
 		return () => { if (viewReader.current === read) viewReader.current = null; };
-	}, [viewReader, qd, kind]);
+	}, [viewReader, qd, kind, hasConfidence]);
 	const viewPresentationKey = JSON.stringify({ ...toClientQuestion(qd), questionType: qd.questionType });
 	useLayoutEffect(() => { viewReader?.changed?.(); }, [viewReader, sel, other, text, thinking, confIdx, viewPresentationKey]);
 	const submit = () => {
@@ -572,9 +575,9 @@ function QuestionDockForm({
 			other: sel.otherSelected ? other : undefined,
 			text: qd.mode === "text" ? answerTextRef.current : undefined,
 			thinking: qd.mode !== "text" ? thinkingTextRef.current.trim() || undefined : undefined,
-			// Always sent on quiz answers (owner: 50 must mean 50, never
-			// "untouched"); buildAnswer drops it on "I don't know".
-			confidence: kind === "quiz" ? CONFIDENCE_STOPS[confIdx] : undefined,
+			// Always sent on quiz and written answers (owner: 50 must mean 50,
+			// never "untouched"); buildAnswer drops it on "I don't know".
+			confidence: hasConfidence ? CONFIDENCE_STOPS[confIdx] : undefined,
 			elapsedSeconds: timer.read(),
 		};
 		// Snapshot before optimistic submission unmounts the form. Ref values
@@ -711,7 +714,7 @@ function QuestionDockForm({
 				// SAME pattern as ↑/↓ over the rows — works wherever focus
 				// sits, no click-in, no focus ring. Dead on "I don't know"
 				// (the slider grays out and nothing is sent).
-				if (kind !== "quiz" || sel.dontKnow) return;
+				if (!hasConfidence || sel.dontKnow) return;
 				e.preventDefault();
 				setConfIdx((i) =>
 					Math.min(
@@ -818,7 +821,7 @@ function QuestionDockForm({
 		layout): right under the options, scrolling with them and sharing
 		their padding — in the stacked question area, or in the answer
 		column's scroller (owner: the same in both arrangements). */
-	const confidenceRow = kind === "quiz" ? (
+	const confidenceRow = hasConfidence ? (
 			<div ref={confidenceRef} data-question-confidence="" className={CONFIDENCE_ROW_PAD}>
 				<div className={QC_CONFIDENCE_ROW}>
 					<span
@@ -856,9 +859,9 @@ function QuestionDockForm({
 							step={1}
 							value={CONFIDENCE_STOPS[confIdx]}
 							disabled={sel.dontKnow}
-							aria-label="Confidence — the probability your selected answer is correct"
+							aria-label={kind === "quiz" ? "Confidence — the probability your selected answer is correct" : "Confidence — the probability your answer is correct"}
 							aria-valuetext={`${CONFIDENCE_STOPS[confIdx]} percent`}
-							title="The probability your selected answer is correct — 50% is a coin flip. Adjust with ←/→."
+							title={`The probability your ${kind === "quiz" ? "selected " : ""}answer is correct — 50% is a coin flip. Adjust with ←/→.`}
 							data-testid="confidence-slider"
 							onChange={(e) => {
 								// Snap to the nearest stop; the rendered VALUE is the stop's own

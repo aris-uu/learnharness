@@ -94,7 +94,10 @@ describe("raw builtin answer validation uses existing grader", () => {
 		assert.doesNotThrow(() => validatePluginBuiltinSubmissionAnswer(question, answer({ values: ["a"], other: "  ", text: "", dontKnow: false })));
 		const textQuestion: QuestionData = { ...question, kind: "explain", mode: "text" };
 		assert.doesNotThrow(() => validatePluginBuiltinSubmissionAnswer(textQuestion, answer({ text: "", images: [image], values: [], other: " ", dontKnow: false })));
-		for (const invalid of [{}, { values: ["a"], text: "x" }, { text: "x", confidence: 20 }, { text: "x", dontKnow: true }]) assert.throws(() => validatePluginBuiltinSubmissionAnswer(textQuestion, answer(invalid)));
+		for (const invalid of [{}, { values: ["a"], text: "x" }, { text: "x", dontKnow: true }]) assert.throws(() => validatePluginBuiltinSubmissionAnswer(textQuestion, answer(invalid)));
+		// Written answers carry confidence since 2026-11-18; ask still never does.
+		assert.equal(validatePluginBuiltinSubmissionAnswer(textQuestion, answer({ text: "x", confidence: 20 })).confidence, 20);
+		assert.throws(() => validatePluginBuiltinSubmissionAnswer({ ...textQuestion, kind: "ask" }, answer({ text: "x", confidence: 20 })));
 	});
 	it("preserves ask multi-select Other combinations but rejects single-select combinations", () => {
 		const ask = { ...question, kind: "ask" as const, mode: "multi-select" as const };
