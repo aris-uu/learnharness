@@ -158,4 +158,21 @@ describe("evidence tools", () => {
 		const empty = await tools.search_evidence!.execute("s2", { query: "?" });
 		assert.equal(empty.isError, true);
 	});
+	it("search_evidence reports each node's memory: stale when long solid, unverified when only assumed", async () => {
+		const store = memoryStore();
+		const old = "2025-01-01T00:00:00.000Z";
+		store.records.push(
+			record({ id: "k", chatId: "old", nodeTitle: "Lagrange's theorem", recordedAt: old }),
+			record({ id: "u", chatId: "old", nodeTitle: "Lagrange's theorem", dimension: "U", recordedAt: old }),
+			record({ id: "a", chatId: "old", nodeId: "m", nodeTitle: "Lagrange corollary", outcome: "assumed", recordedAt: old }),
+		);
+		const tools = createProberTools(ctxWith(store), undefined, "math");
+		const result = await tools.search_evidence!.execute("s", { query: "lagrange" });
+		const details = result.details as { results: Array<{ node: string; memory?: { recall?: number; stale?: boolean; unverified?: boolean } }> };
+		const solid = details.results.find((r) => r.node === "Lagrange's theorem")!;
+		assert.equal(solid.memory!.stale, true);
+		assert.ok(solid.memory!.recall! < 0.85);
+		const assumed = details.results.find((r) => r.node === "Lagrange corollary")!;
+		assert.deepEqual(assumed.memory, { unverified: true });
+	});
 });
