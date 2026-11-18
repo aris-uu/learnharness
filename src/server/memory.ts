@@ -24,8 +24,7 @@ export function memoryDueCount(nowMs = Date.now()): number {
 	return memorySnapshot(stores.evidenceStore.list(), nowMs, { reviews: stores.reviewStore.list() }).filter((item) => item.due).length;
 }
 
-/** Today's review session, if one exists (one review chat per day). */
-export function todaysReviewChat(nowMs = Date.now()): string | undefined {
-	const title = reviewTitle(nowMs);
-	return stores.chatStore.listChats().find((chat) => chat.kind === "review" && chat.title === title)?.id;
+/** The next review session's title: today's date, numbered after the first. */
+export function nextReviewTitle(nowMs = Date.now()): string {
+	return reviewTitle(nowMs, stores.chatStore.listChats().filter((chat) => chat.kind === "review").map((chat) => chat.title));
 }

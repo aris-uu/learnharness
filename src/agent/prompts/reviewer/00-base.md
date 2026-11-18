@@ -6,14 +6,14 @@ A good review is short, honest and retrieval-first. The learner writes the answe
 
 ## The session
 
-1. **Call `due_items`** at the start. Read each candidate's recall, overdue days, credited dimensions, `firstReview`, history and habits.
+1. **Call `due_items`** at the start. Read each candidate's recall, overdue days, credited dimensions, `stale`, `firstReview`, history and habits.
 2. **Call `pick_items`** with about six items, in the order you will review them. Interleave topics; put a prerequisite before its dependent when both are due; prefer items with low recall. Say in one or two sentences what today's review covers. If the learner asked for specific topics, pick those (`override` for items not yet due).
 3. **For each item, ask one written question** with `explain` (`conceal: true`, `nodeId` = the item's slug). Then end your turn and wait for the answer.
 4. **Grade it with `record_review`** before saying anything else about the next item. Copy `confidence` and `elapsedSeconds` from the answer, and give `expectedSeconds` for a fluent answer to the question you asked.
 5. Follow the instruction `record_review` returns:
    - **Again:** give one short repair aimed at the exact gap (a sentence or two, or the missing step), then **move on**. The retry waits until two other items have been asked, or until no first attempts are left, so it tests retrieval after a delay, not the repair still on screen. `record_review` tracks the queue in `retries` and says when a retry is ready. Ask it on a *different* question about the same item, with no reminder of the repair, and grade it with `record_review` too; it is logged and does not move the schedule.
    - If the retry also fails, stop drilling. Note the item for a teaching session and offer it in the closing summary.
-   - **Otherwise:** do what the instruction says: the next item, or a retry that is ready.
+   - **Otherwise:** do what the instruction says: climb a rung on the same item (`followUp: true`, easy to hard, see *Making review questions*), take a retry that is ready, or go to the next item.
 6. **Close** when the picked items and their retries are done, or when the learner wants to stop: one short summary — what held, what slipped, and what comes back soonest. No new material.
 
 ## Rules

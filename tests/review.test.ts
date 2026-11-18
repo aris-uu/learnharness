@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import type { EvidenceRecord, EvidenceStore } from "../src/core/math-evidence.ts";
-import { ratingFor, retryQueue, reviewNodeIds, type ReviewEvent, type ReviewStore } from "../src/core/memory/review.ts";
+import { ratingFor, retryQueue, reviewNodeIds, reviewTitle, type ReviewEvent, type ReviewStore } from "../src/core/memory/review.ts";
 import { phaseAt3Lh } from "../src/core/phases.ts";
 import type { LhMessage } from "../src/core/native-messages.ts";
 import type { PlanTree } from "../src/core/contracts/plan.ts";
@@ -65,6 +65,15 @@ describe("deferred retries", () => {
 	});
 	it("never queues an item the learner said was not consolidated", () => {
 		assert.deepEqual(retryQueue([ev("a", 1, 1, "review", { noRetry: true })], picked).waiting, []);
+	});
+});
+
+describe("review titles", () => {
+	it("numbers the second and later review sessions of a day", () => {
+		const t = Date.parse("2026-11-18T09:00:00.000Z");
+		assert.equal(reviewTitle(t), "Review 2026-11-18");
+		assert.equal(reviewTitle(t, ["Review 2026-11-18"]), "Review 2026-11-18 (2)");
+		assert.equal(reviewTitle(t, ["Review 2026-11-18", "Review 2026-11-18 (2)", "Review 2026-11-17"]), "Review 2026-11-18 (3)");
 	});
 });
 
@@ -146,6 +155,30 @@ describe("reviewer tools", () => {
 		assert.deepEqual(review.tree!.edges, [{ from: "hausdorff", to: "compact" }]);
 		const forced = await call("pick_items", { itemIds: ["teach1#fresh"], override: true });
 		assert.equal(forced.isError, undefined);
+	});
+
+	it("due_items marks faded items stale, so they start on the easiest rung", async () => {
+		const { call } = setup(T0 + 60 * DAY);
+		const { details } = await call("due_items", {});
+		assert.equal(details.candidates[0].stale, true);
+	});
+
+	it("record_review climbs easy to hard: follow-ups only after a clean rung, logged without moving the schedule", async () => {
+		const { call, answer, reviews } = setup(T0 + 60 * DAY);
+		await call("pick_items", { itemIds: ["teach1#compact"] });
+		const grade = { nodeId: "compact", dimension: "K", outcome: "correct", hints: 0, question: "State it", note: "clean" };
+		answer("compact", "x1");
+		assert.equal((await call("record_review", { ...grade, followUp: true }, "f0")).isError, true, "no first attempt yet");
+		const first = await call("record_review", grade, "g1");
+		assert.equal(first.details.rating, "Good");
+		assert.match(first.details.instruction, /climb one rung/);
+		const dueAfterFirst = first.details.nextDue;
+		const up = await call("record_review", { ...grade, dimension: "U", outcome: "partial", question: "Drop Hausdorff", followUp: true }, "f1");
+		assert.equal(up.details.kind, "followup");
+		assert.match(up.details.instruction, /slipped/);
+		assert.equal(up.details.nextDue, dueAfterFirst, "a follow-up never moves the schedule");
+		assert.equal((await call("record_review", { ...grade, dimension: "P", followUp: true }, "f2")).isError, true, "no climbing after a slip");
+		assert.deepEqual(reviews.map((e) => e.kind), ["review", "followup"]);
 	});
 
 	it("record_review defers an Again's retry behind other items", async () => {
