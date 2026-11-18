@@ -55,9 +55,15 @@ describe("FSRS core", () => {
 });
 
 describe("memory items from the ledger", () => {
-	it("seeds Good for a solid node with clean K and a deeper dimension", () => {
+	it("seeds Good for a solid node with clean K and a deeper dimension credited after the teaching window", () => {
+		const later = T0 + 86_400_000;
+		const seed = seedFor([record({ id: "a" }), record({ id: "b", dimension: "U", recordedAt: iso(later) })]);
+		assert.deepEqual(seed, { status: "scheduled", rating: 3, at: iso(later) });
+	});
+
+	it("caps the seed at Hard when every credit was earned while the node was taught", () => {
 		const seed = seedFor([record({ id: "a" }), record({ id: "b", dimension: "U", recordedAt: iso(T0 + 1000) })]);
-		assert.deepEqual(seed, { status: "scheduled", rating: 3, at: iso(T0 + 1000) });
+		assert.deepEqual(seed, { status: "scheduled", rating: 2, at: iso(T0 + 1000) });
 	});
 
 	it("seeds Hard for a solid node reached slowly", () => {

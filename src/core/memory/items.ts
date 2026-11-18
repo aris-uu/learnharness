@@ -65,11 +65,13 @@ export interface MemoryItemSnapshot extends MemoryItem {
 
 const credits = (e: EvidenceRecord) => (e.outcome === "correct" || e.outcome === "correct_slow") && e.hints <= 1;
 const ms = (iso: string) => Date.parse(iso);
+/** Credit within this span of a node's first attempt counts as encoding, not retention. */
+export const ENCODING_WINDOW_MS = 12 * 3_600_000;
 
 /**
  * The seed a node's teaching-session evidence implies (plan §4):
- * solid with an unhinted, non-slow K and deeper dimension → Good; solid
- * otherwise → Hard; in progress → Again (at the last attempt); assumed only →
+ * solid with an unhinted, non-slow K and deeper dimension, credited past
+ * the teaching session's encoding window → Good; solid otherwise → Hard; in progress → Again (at the last attempt); assumed only →
  * unverified (no seed); skipped → not an item.
  */
 export function seedFor(records: readonly EvidenceRecord[]): { status: MemoryItemStatus; rating?: FsrsRating; at?: string } | null {
@@ -84,7 +86,16 @@ export function seedFor(records: readonly EvidenceRecord[]): { status: MemoryIte
 	}
 	const credited = records.filter(credits);
 	const clean = (dims: readonly MathDimension[]) => credited.some((e) => dims.includes(e.dimension) && e.outcome === "correct" && e.hints === 0);
-	const rating: FsrsRating = clean(["K"]) && clean(["U", "S", "P"]) ? 3 : 2;
+	// ENCODING IS NOT RETENTION (owner, 2026-11-18, after the first review):
+	// credit earned only while the node was being taught (every credited
+	// record within ENCODING_WINDOW_MS of the first attempt) shows it was
+	// understood, not that it survives a delay. Such a seed is capped at
+	// Hard, so the first real retrieval comes after about two days instead
+	// of a week. Credit from a later return (a re-test hours or days on)
+	// keeps the full seed.
+	const firstAttempt = Math.min(...records.filter((e) => e.outcome !== "assumed" && e.outcome !== "learner_override").map((e) => ms(e.recordedAt)));
+	const encodingOnly = credited.every((e) => ms(e.recordedAt) - firstAttempt < ENCODING_WINDOW_MS);
+	const rating: FsrsRating = clean(["K"]) && clean(["U", "S", "P"]) && !encodingOnly ? 3 : 2;
 	return { status: "scheduled", rating, at: credited.at(-1)!.recordedAt };
 }
 

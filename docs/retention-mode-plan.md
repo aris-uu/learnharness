@@ -87,8 +87,8 @@ FSRS-6 tracks **one schedule per item**. The K/U/S/P dimensions play the role th
 
 | The node's final status in its teaching chat | Seed |
 |---|---|
-| solid, with an unhinted `correct` K and an unhinted `correct` U/S/P | `seed` Good at the time of the last credited record |
-| solid otherwise (a hint or a slow answer) | `seed` Hard |
+| solid, with an unhinted `correct` K and an unhinted `correct` U/S/P, some of it credited more than 12 h after the first attempt | `seed` Good at the time of the last credited record |
+| solid otherwise (a hint, a slow answer, or all credit earned within 12 h of the first attempt, i.e. while it was being taught) | `seed` Hard |
 | in_progress (latest partial/incorrect) | `seed` Again, so it is due within about a day |
 | assumed only | item `unverified`, due now, low priority: verify once |
 | skipped (learner_override) | not seeded |

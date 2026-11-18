@@ -133,6 +133,7 @@ describe("reviewer tools", () => {
 		assert.deepEqual(details.candidates.map((c: { itemId: string }) => c.itemId), ["teach1#hausdorff", "teach1#compact"]);
 		assert.equal(details.candidates[0].session, "Topology");
 		assert.deepEqual(details.candidates[1].duePrereqs, ["teach1#hausdorff"]);
+		assert.equal(details.candidates[0].firstReview, true, "never reviewed: the first question goes to a credited dimension");
 	});
 
 	it("pick_items writes the session map with prerequisite edges, and refuses items not due", async () => {

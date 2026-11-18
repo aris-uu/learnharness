@@ -29,7 +29,7 @@ Below 70% credited over the recent attempts, `record_evidence` tells the tutor t
 
 ### Confidence on written answers
 
-Written answers (`explain`, `recall`) have the same confidence slider as quiz answers, in every session: your probability that what you wrote is correct. It is never sent with "I don't know". The tutor reads it against its own grade, so a confident wrong argument shows up as a misconception and a hesitant right one as fragile knowledge. Older written answers have no confidence. In written answers the slider is set with the mouse, because ←/→ move the caret in the answer field.
+Written answers (`explain`, `recall`) have the same confidence slider as quiz answers, in every session: your probability that what you wrote is correct. It is never sent with "I don't know". The tutor reads it against its own grade, so a confident wrong argument shows up as a misconception and a hesitant right one as fragile knowledge. The slider starts unset: no confidence is sent until you move it, so an answer without one and a deliberate 50% stay distinguishable. Older written answers have no confidence. In written answers the slider is set with the mouse, because ←/→ move the caret in the answer field.
 
 ### Habit tags
 
@@ -45,7 +45,7 @@ Every node with math-mode evidence gets a forgetting curve (FSRS-6, default para
 
 ### Review sessions
 
-**Start review** on the Memory page opens today's review session (one per day, titled `Review YYYY-MM-DD`). The reviewer lists the due items (`due_items`), picks about six (`pick_items`), which become the session's map, and asks one fresh written question per item, never one asked before. It grades each with `record_review`, and the server turns the grade into an FSRS rating:
+**Review** in the sidebar, or **Start review** on the Memory page, opens today's review session (one per day, titled `Review YYYY-MM-DD`). The reviewer lists the due items (`due_items`), picks about six (`pick_items`), which become the session's map, and asks one fresh written question per item, never one asked before. It grades each with `record_review`, and the server turns the grade into an FSRS rating:
 
 | Grade | Rating |
 |---|---|
@@ -54,7 +54,7 @@ Every node with math-mode evidence gets a forgetting curve (FSRS-6, default para
 | correct, unaided | Good |
 | correct, unaided, ≥ 90% confident and within the expected time | Easy |
 
-Only the first attempt on an item in a session moves its schedule. After an Again the reviewer gives one short repair at once, but defers the retry until two other items have had their first attempt (or nothing else is left), so it measures retrieval rather than the repair. The retry is on a different question and is logged but not scheduled. An item the learner says was never consolidated is graded Again with `noRetry` and goes to a teach session instead; the item comes back no sooner than a day later. Reviews are appended to `memory/reviews.jsonl` in the data folder, and every curve is replayed from the evidence ledger plus that log. Review sessions extract nothing into the graph. Design and later phases: [retention-mode-plan.md](retention-mode-plan.md).
+Each question asks one thing and should take one to three minutes (five for a proof step). An item's first review asks on a dimension it was already credited on; untested dimensions wait until it has passed a review. Only the first attempt on an item in a session moves its schedule. After an Again the reviewer gives one short repair at once, but defers the retry until two other items have had their first attempt (or nothing else is left), so it measures retrieval rather than the repair. The retry is on a different question and is logged but not scheduled. An item the learner says was never consolidated is graded Again with `noRetry` and goes to a teach session instead; the item comes back no sooner than a day later. Reviews are appended to `memory/reviews.jsonl` in the data folder, and every curve is replayed from the evidence ledger plus that log. Review sessions extract nothing into the graph. Design and later phases: [retention-mode-plan.md](retention-mode-plan.md).
 
 ## Going back
 

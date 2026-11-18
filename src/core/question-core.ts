@@ -500,7 +500,7 @@ export interface AnswerRequest {
 	text?: string; // ask text-mode
 	thinking?: string; // the reasoning-on-the-question channel (was `note`)
 	readingThinking?: string; // the thinking-while-reading channel (check answers)
-	confidence?: number; // quiz and explain: 0-100 raw probability — 50 is a real coin flip, always sent (owner, 2026-10-01)
+	confidence?: number; // quiz and explain: 0-100 raw probability — 50 is a real coin flip; absent until the learner sets the slider (owner, 2026-11-18)
 	elapsedSeconds?: number; // the dock's answer timer: active whole seconds (owner, 2026-11-12)
 }
 
@@ -531,6 +531,8 @@ export interface QuestionFormDraft {
 	other: string;
 	text: string;
 	confidenceIndex: number;
+	/** Whether the learner moved the slider; untouched sends no confidence. */
+	confidenceSet?: boolean;
 }
 
 export interface QuestionDraft {
