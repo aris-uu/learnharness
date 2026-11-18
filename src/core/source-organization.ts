@@ -36,7 +36,7 @@ export interface SourceDirectory {
 /** Chains browsing and practice picking share this presentation inventory.
  * Keep the full organization: hidden sessions still own their placements. */
 export function chainSourceDirectory(directory: SourceDirectory): SourceDirectory {
-	return { ...directory, sources: directory.sources.filter((s) => s.chatKind !== "practice") };
+	return { ...directory, sources: directory.sources.filter((s) => s.chatKind !== "practice" && s.chatKind !== "review") };
 }
 export type OrganizationAction =
 	| { action: "create-folder"; name: string; parentId: string | null }

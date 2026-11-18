@@ -21,7 +21,7 @@ export function narrationGuardApplies(
 	model: { provider: string; id: string },
 	toolsOverridden: boolean,
 ): boolean {
-	return kind === "teacher" && sendToUserApplies(kind, model, toolsOverridden);
+	return (kind === "teacher" || kind === "reviewer") && sendToUserApplies(kind, model, toolsOverridden);
 }
 
 export function isNarrationBlock(block: { type: string; thinkingSignature?: string }): boolean {

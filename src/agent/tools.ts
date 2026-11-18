@@ -19,6 +19,8 @@ import { jobTools, type DemoInput, type PdfInput, type ResearchInput, type Visua
 import { planTools, type PlanToolContext } from "./tools/plan.ts";
 import { mathTeacherTools, requireConcealedAnswer, searchEvidenceTool } from "./tools/math.ts";
 import type { EvidenceStore } from "../core/math-evidence.ts";
+import type { ReviewStore } from "../core/memory/review.ts";
+import { reviewTools, type ReviewToolContext } from "./tools/review.ts";
 import type { TeachingProfile } from "../core/contracts/chat.ts";
 import { probeDoneTool, type ProbeDoneContext } from "./tools/probe.ts";
 import { proberGraphTools } from "./tools/graph.ts";
@@ -280,15 +282,17 @@ export interface ProberToolContext extends ProbeDoneContext {
 	graphStore?: GraphStore;
 	/** The global evidence ledger: present = search_evidence in math mode. */
 	evidenceStore?: EvidenceStore;
+	/** The review log: search_evidence's recall reflects reviews when present. */
+	reviewStore?: ReviewStore;
 }
 
 /** search_evidence for math mode, when the composition root wired the ledger. */
 function evidenceSearch(
-	ctx: { chatId: string; chatStore: PlanToolContext["chatStore"]; evidenceStore?: EvidenceStore },
+	ctx: { chatId: string; chatStore: PlanToolContext["chatStore"]; evidenceStore?: EvidenceStore; reviewStore?: ReviewStore },
 	profile?: TeachingProfile,
 ): Record<string, AgentTool<any>> {
 	if (profile !== "math" || !ctx.evidenceStore) return {};
-	const tool = searchEvidenceTool({ chatId: ctx.chatId, chatStore: ctx.chatStore, evidenceStore: ctx.evidenceStore });
+	const tool = searchEvidenceTool({ chatId: ctx.chatId, chatStore: ctx.chatStore, evidenceStore: ctx.evidenceStore, ...(ctx.reviewStore ? { reviewStore: ctx.reviewStore } : {}) });
 	return { [tool.name]: tool };
 }
 
@@ -421,6 +425,8 @@ export interface TeacherToolContext extends PlanToolContext {
 	/** The global evidence ledger: record_evidence copies into it, and
 	 *  search_evidence reads it (math mode). Absent in bare tests. */
 	evidenceStore?: EvidenceStore;
+	/** The review log (see ProberToolContext). */
+	reviewStore?: ReviewStore;
 }
 
 /**
@@ -491,6 +497,28 @@ export function createTeacherTools(
 			...jobTools({ chatId: ctx.chatId, jobStore: ctx.jobStore, spawn: ctx.spawn, searchAvailable: ctx.searchAvailable }),
 		},
 		withoutMechanics(enabled),
+		),
+	);
+}
+
+/** The REVIEWER's tool set (review sessions, retention mode phase 2): the
+ *  due list, the pick, a concealed written question tagged with a picked
+ *  item, ask, the grade, and search_evidence. No plan_init, no gate, no
+ *  jobs, no graph. */
+export function createReviewerTools(ctx: ReviewToolContext, enabled?: EnabledTools): Record<string, AgentTool<any>> {
+	const review = reviewTools(ctx);
+	const search = searchEvidenceTool({ chatId: ctx.chatId, chatStore: ctx.chatStore, evidenceStore: ctx.evidenceStore, reviewStore: ctx.reviewStore });
+	return healToolRecord(
+		filterEnabledTools(
+			{
+				explain: requireConcealedAnswer(teachExplainToolFor(ctx)),
+				ask_user_question: askUserQuestionTool,
+				[review.dueItems.name]: review.dueItems,
+				[review.pickItems.name]: review.pickItems,
+				[review.recordReview.name]: review.recordReview,
+				[search.name]: search,
+			},
+			withoutMechanics(enabled),
 		),
 	);
 }

@@ -21,6 +21,7 @@ import {
 } from "../../core/math-evidence.ts";
 import type { LhMessage } from "../../core/native-messages.ts";
 import { DEFAULT_DESIRED_RETENTION, memoryItemId, memorySnapshot } from "../../core/memory/items.ts";
+import type { ReviewStore } from "../../core/memory/review.ts";
 import { invalidInputResult } from "../tool-execute.ts";
 import type { PlanToolContext } from "./plan.ts";
 
@@ -61,7 +62,7 @@ const searchEvidenceInput = Type.Object({
 });
 
 /** Search evidence recorded in the learner's OTHER sessions (math mode, prober and teacher). */
-export function searchEvidenceTool(ctx: MathToolContext & { evidenceStore: EvidenceStore }): AgentTool<typeof searchEvidenceInput> {
+export function searchEvidenceTool(ctx: MathToolContext & { evidenceStore: EvidenceStore; reviewStore?: ReviewStore }): AgentTool<typeof searchEvidenceInput> {
 	return {
 		name: SEARCH_EVIDENCE_TOOL,
 		label: SEARCH_EVIDENCE_TOOL,
@@ -76,7 +77,7 @@ export function searchEvidenceTool(ctx: MathToolContext & { evidenceStore: Evide
 			const hits = searchEvidence(records, input.query, ctx.chatId);
 			if (hits === null) return invalidInputResult(SEARCH_EVIDENCE_TOOL, ["query holds no searchable word (use words of two or more letters)."]);
 			const titles = new Map(ctx.chatStore.listChats().map((chat) => [chat.id, chat.title]));
-			const memory = new Map(memorySnapshot(records, Date.now()).map((item) => [item.id, item]));
+			const memory = new Map(memorySnapshot(records, Date.now(), { reviews: ctx.reviewStore?.list() ?? [] }).map((item) => [item.id, item]));
 			const results = hits.map(({ record, nodeStatus: status }) => ({
 				session: titles.get(record.chatId) ?? record.chatId,
 				sessionId: record.chatId,

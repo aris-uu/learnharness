@@ -6,6 +6,7 @@
  */
 import Link from "next/link";
 import type { MemoryView, MemoryViewItem } from "@/src/core";
+import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 const DAY_MS = 86_400_000;
@@ -34,14 +35,18 @@ export function RecallSparkline({ item, now, retention, width = 160, height = 32
 	);
 }
 
-export function MemoryTable({ view, filter }: { view: MemoryView; filter: "due" | "all" }) {
+/** `action` is the header slot (the page passes the Start review button). */
+export function MemoryTable({ view, filter, action }: { view: MemoryView; filter: "due" | "all"; action?: ReactNode }) {
 	const shown = filter === "due" ? view.items.filter((item) => item.due) : view.items;
 	const due = view.items.filter((item) => item.due).length;
 	const stale = view.items.filter((item) => item.stale).length;
 	const unverified = view.items.filter((item) => item.status === "unverified").length;
 	return (
 		<div className="mx-auto w-full max-w-5xl px-6 py-8" data-testid="memory-view">
-			<h1 className="font-serif text-2xl">Memory</h1>
+			<div className="flex items-center justify-between gap-4">
+				<h1 className="font-serif text-2xl">Memory</h1>
+				{action}
+			</div>
 			<p className="mt-1 text-sm text-muted-foreground">
 				{view.items.length} items from math-mode evidence · {due} due · {stale} stale (solid when taught, now below {Math.round(view.retention * 100)}%) · {unverified} only assumed
 			</p>

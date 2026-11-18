@@ -10,11 +10,13 @@ import type { TeachingProfile } from "../core/contracts/chat.ts";
 import {
 	askUserQuestionTool,
 	createProberTools,
+	createReviewerTools,
 	createTeacherTools,
 	type ProbeDoneContext,
 	type ProberToolContext,
 	type TeacherToolContext,
 } from "./tools.ts";
+import type { ReviewToolContext } from "./tools/review.ts";
 import { practiceTools, createPracticeGate, type PracticeGate, type PracticeToolContext } from "./tools/practice.ts";
 import { pluginProblemTools, isPluginProblemPoseAcknowledgment, type NativePluginProblemContribution } from "./plugin-problem-tools.ts";
 import { healToolRecord, withArgumentHeal } from "./tools/heal.ts";
@@ -55,7 +57,7 @@ import { PluginQuestionLedger, type NativePluginQuestionContribution } from "./p
 
 /** Which agent's prompt directory to compose. Practice (2026-10-04)
  *  composes ONLY its own directory — see prompt-segments.ts. */
-export type AgentKind = "prober" | "teacher" | "practice";
+export type AgentKind = "prober" | "teacher" | "practice" | "reviewer";
 
 /** Reserve conversation builtins even when role/mechanics/settings gates hide them.
  * New builtin names must join this catalog; actual turn tools are reserved too. */
@@ -112,6 +114,7 @@ const composedInstructions: Record<AgentKind, string> = {
 	prober: composeInstructions("prober"),
 	teacher: composeInstructions("teacher"),
 	practice: composeInstructions("practice"),
+	reviewer: composeInstructions("reviewer"),
 };
 
 // Money channel (wave 4): the chat-handler passes a per-turn collector;
@@ -245,7 +248,8 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 	// replacing a builtin. Explicit test registries stay caller-owned.
 	const builtinNames = new Set<string>([...CONVERSATION_TOOL_NAMES, ...builtinTools.map(tool => tool.name)]);
 	const mcpTools = opts.tools === undefined ? (opts.mcpTools?.[kind] ?? []).filter(tool => !builtinNames.has(tool.name)) : [];
-	const contributions = opts.tools === undefined && opts.chatId && opts.pluginContributions
+	// Plugins target prober/teacher/practice; the reviewer takes none yet.
+	const contributions = opts.tools === undefined && opts.chatId && opts.pluginContributions && kind !== "reviewer"
 		? opts.pluginContributions({ chatId: opts.chatId, agent: kind }, [...builtinNames, ...mcpTools.map(tool => tool.name)])
 		: undefined;
 	const questionLedger = contributions?.questionTypes?.length && opts.chatId
@@ -425,8 +429,22 @@ export function createPracticeAgent(ctx: PracticeToolContext, opts: AgentBuildOp
 	return baseAgentOptions("practice", opts, Object.values(practiceTools(ctx, gate)), undefined, { gate, graphNodes: ctx.graphNodes });
 }
 
+/**
+ * The REVIEWER (review sessions, retention mode phase 2 — 2026-11-18):
+ * built from turn 1 of a kind:"review" session. It lists due memory items,
+ * picks a session's worth, asks one fresh written question per item and
+ * grades it with record_review, which moves the item's forgetting curve.
+ * Doctrine: prompts/reviewer/.
+ */
+export function createReviewerAgent(ctx: ReviewToolContext, opts: AgentBuildOptions = {}) {
+	const tools = opts.tools ?? createReviewerTools(ctx, opts.toolToggles);
+	return baseAgentOptions("reviewer", { ...opts, profile: undefined }, Object.values(tools),
+		nodeId => ctx.chatStore.getChat(ctx.chatId)?.tree?.nodes.some(node => node.id === nodeId) ?? false);
+}
+
 export type ProberAgent = ReturnType<typeof createProberAgent>;
 export type TeacherAgent = ReturnType<typeof createTeacherAgent>;
 export type PracticeAgent = ReturnType<typeof createPracticeAgent>;
-export type TeachingAgent = ProberAgent | TeacherAgent | PracticeAgent;
+export type ReviewerAgent = ReturnType<typeof createReviewerAgent>;
+export type TeachingAgent = ProberAgent | TeacherAgent | PracticeAgent | ReviewerAgent;
 

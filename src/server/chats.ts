@@ -176,6 +176,7 @@ function finishChatRecordDeletion(chatId: string): number {
 	const jobsRemoved = stores.jobStore.deleteJobsForChat(chatId);
 	// The global evidence ledger is a copy of this record's evidence: it goes first.
 	stores.evidenceStore.removeChat(chatId);
+	stores.reviewStore.removeChat(chatId);
 	if (stores.chatStore.deleteChat(chatId)) {
 		discardChatDeliveries(chatId);
 		clearTurnFailure(chatId);

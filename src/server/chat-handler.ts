@@ -1,6 +1,7 @@
 import type { Usage } from "@earendil-works/pi-ai";
 import {
 	createPracticeAgent,
+	createReviewerAgent,
 	createProberAgent,
 	createTeacherAgent,
 	type AgentBuildOptions,
@@ -365,7 +366,7 @@ export async function handleChatInput(
 	const modelIdForCompaction = `${conversationEngine.model.provider}:${conversationEngine.model.id}`;
 	const contextWindow = catalogContextLimits().get(modelIdForCompaction);
 	const thresholdTokens = effectiveThresholdTokens(effective.compaction?.thresholdTokens, contextWindow);
-	const systemPromptTokens = Math.ceil(composeInstructions(record.kind === "practice" ? "practice" : "teacher").length / 4);
+	const systemPromptTokens = Math.ceil(composeInstructions(record.kind === "practice" ? "practice" : record.kind === "review" ? "reviewer" : "teacher").length / 4);
 	const estimateModel = effective.compaction.includeReasoning ? conversationEngine.model : undefined;
 	const fitsSideContext = (messages: readonly LhMessage[]) => {
 		const live = messages.filter((message) => (message as { role: string }).role !== "system");
@@ -390,7 +391,7 @@ export async function handleChatInput(
 			engine: compactionEngine,
 			canStart: () => !isTurnRunning(chatId) && connectionBackgroundAllowed(conversation.provider),
 			modelId: modelIdForCompaction,
-			kind: record.kind === "practice" ? "practice" : hasProbeDone(record.messages) ? "teach" : "probe",
+			kind: record.kind === "practice" ? "practice" : record.kind === "review" || hasProbeDone(record.messages) ? "teach" : "probe",
 			includeReasoning: effective.compaction.includeReasoning,
 			thresholdTokens,
 			systemPromptTokens,
@@ -739,6 +740,11 @@ export async function handleChatInput(
 	// uniform across kinds).
 	const constructed: TeachingAgent = buildAgent
 		? buildAgent({ ...agentOpts, teaching })
+		: record.kind === "review"
+			? createReviewerAgent(
+					{ chatId, chatStore: stores.chatStore, evidenceStore: stores.evidenceStore, reviewStore: stores.reviewStore },
+					agentOpts,
+				)
 		: record.kind === "practice"
 			? createPracticeAgent(
 					{
@@ -774,6 +780,7 @@ export async function handleChatInput(
 						// = no research tool in the teacher's registry.
 						searchAvailable,
 						evidenceStore: stores.evidenceStore,
+						reviewStore: stores.reviewStore,
 					},
 					agentOpts,
 				)
@@ -793,6 +800,7 @@ export async function handleChatInput(
 						// graph master switch AND the agent.graphTools toggle.
 						...(graphToolsEnabled(effective) ? { graphStore: stores.graphStore } : {}),
 						evidenceStore: stores.evidenceStore,
+						reviewStore: stores.reviewStore,
 					},
 					agentOpts,
 				);
@@ -891,8 +899,9 @@ export async function handleChatInput(
 				// extraction, its auditor — dies with the master switch.
 				// PRACTICE (owner, 2026-10-04): practice sessions write nothing —
 				// no extraction, no graph, no coverage (v1: the session itself
-				// is the deliverable).
-				if ((!requestCycle || requestCycle.dispatched) && record.kind !== "practice" && extractionEnabled(effective.graph)) {
+				// is the deliverable). REVIEW sessions likewise: they re-test what
+				// teaching already extracted.
+				if ((!requestCycle || requestCycle.dispatched) && record.kind !== "practice" && record.kind !== "review" && extractionEnabled(effective.graph)) {
 					// Fresh per-turn read of the graph section's chunk budget
 					// (extraction-UX redesign, 2026-09-24): the trigger compares
 					// against it and the pipeline's batches share it.
@@ -945,13 +954,13 @@ export async function handleChatInput(
 							engine: kickEngine,
 							canStart: () => !isTurnRunning(chatId) && connectionBackgroundAllowed(spec.provider),
 							modelId: kickModelId,
-							kind: freshRecord.kind === "practice" ? "practice" : hasProbeDone(freshRecord.messages) ? "teach" : "probe",
+							kind: freshRecord.kind === "practice" ? "practice" : freshRecord.kind === "review" || hasProbeDone(freshRecord.messages) ? "teach" : "probe",
 							includeReasoning: fresh.compaction.includeReasoning,
 							thresholdTokens: effectiveThresholdTokens(
 								fresh.compaction?.thresholdTokens,
 								catalogContextLimits().get(kickModelId),
 							),
-							systemPromptTokens: Math.ceil(composeInstructions(freshRecord.kind === "practice" ? "practice" : "teacher").length / 4),
+							systemPromptTokens: Math.ceil(composeInstructions(freshRecord.kind === "practice" ? "practice" : freshRecord.kind === "review" ? "reviewer" : "teacher").length / 4),
 						};
 					}, chatId);
 			},
