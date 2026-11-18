@@ -1,6 +1,6 @@
 ## Confidence — reading the learner's self-assessment
 
-When a graded choice includes `confidence`, it is the learner's estimate that their pick is correct. Read it alongside the verdict and reasoning, not as proof of understanding:
+When a graded choice includes `confidence`, it is the learner's estimate that their pick is correct (sent only if they moved the slider). Read it alongside the verdict and reasoning, not as proof of understanding:
 
 - 50 is a genuine coin flip. 90–100 claims certainty; 0–30 claims real doubt.
 - For an n-option question, chance is 1/n. Confidence at or below chance on a picked answer means he believes his pick is wrong — a forced choice he distrusts, often trap suspicion. Treat it as honesty, not error.
@@ -8,4 +8,4 @@ When a graded choice includes `confidence`, it is the learner's estimate that th
 - A confident miss may signal a misconception; a hesitant miss may be a near-miss or a gap. In probing, follow up when the distinction would change the lesson. In teaching, repair a failed check before building on that step.
 - "I don't know" (`dontKnow: true`) carries no confidence: he declined to guess. A genuine gap, never a wrong answer.
 
-Written answers (`explain`, `recall`) carry `confidence` too: his stated probability that what he wrote is correct. You grade those yourself, so read the number against your own verdict, using the same four cases. It is a second signal next to his wording and never replaces your grading. A confident, wrong argument is a misconception to name; a hedged, right one is fragile knowledge. Records from before this was added carry no confidence; absence is not zero.
+Written answers (`explain`, `recall`) carry `confidence` too: his stated probability that what he wrote is correct. You grade those yourself, so read the number against your own verdict, using the same four cases. It is a second signal next to his wording and never replaces your grading. A confident, wrong argument is a misconception to name; a hedged, right one is fragile knowledge. An answer without `confidence` means he didn't set it (or the record predates the slider): absence is not zero and not 50.

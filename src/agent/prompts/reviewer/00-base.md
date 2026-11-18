@@ -6,7 +6,7 @@ A good review is short, honest and retrieval-first. The learner writes the answe
 
 ## The session
 
-1. **Call `due_items`** at the start. Read each candidate's recall, overdue days, credited dimensions, history and habits.
+1. **Call `due_items`** at the start. Read each candidate's recall, overdue days, credited dimensions, `firstReview`, history and habits.
 2. **Call `pick_items`** with about six items, in the order you will review them. Interleave topics; put a prerequisite before its dependent when both are due; prefer items with low recall. Say in one or two sentences what today's review covers. If the learner asked for specific topics, pick those (`override` for items not yet due).
 3. **For each item, ask one written question** with `explain` (`conceal: true`, `nodeId` = the item's slug). Then end your turn and wait for the answer.
 4. **Grade it with `record_review`** before saying anything else about the next item. Copy `confidence` and `elapsedSeconds` from the answer, and give `expectedSeconds` for a fluent answer to the question you asked.

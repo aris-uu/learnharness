@@ -488,7 +488,13 @@ function QuestionDockForm({
 	// resting at 50 — a real coin flip by definition, untouched or
 	// deliberate (the same number, the same meaning). The dock unmounts
 	// between questions, so each question starts fresh at 50.
-	const [confIdx, setConfIdx] = useState<number>(initialDraft?.confidenceIndex ?? DEFAULT_CONFIDENCE_INDEX);
+	const [confIdx, setConfIdxRaw] = useState<number>(initialDraft?.confidenceIndex ?? DEFAULT_CONFIDENCE_INDEX);
+	// UNSET UNTIL TOUCHED (owner, 2026-11-18, after the first review: six of
+	// eight answers carried an untouched 50). The thumb rests mid-rail, but
+	// no confidence is sent until the learner moves it, so "not given" and
+	// "a deliberate 50" stay distinguishable.
+	const [confSet, setConfSet] = useState<boolean>(initialDraft?.confidenceSet ?? false);
+	const setConfIdx: typeof setConfIdxRaw = (value) => { setConfSet(true); setConfIdxRaw(value); };
 	const selectMode: SelectMode = qd.mode === "multi-select" ? "multi-select" : "single-select";
 	// The answer timer (owner 2026-11-12): starts the first time the form
 	// is SHOWN (a teach check on reveal), survives scroll-collapse and
@@ -534,21 +540,21 @@ function QuestionDockForm({
 	const currentQuestion = useRef(qd); currentQuestion.current = qd;
 	const mounted = useRef(true);
 	useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-	const formValues = useRef({ sel, other, confIdx }); formValues.current = { sel, other, confIdx };
+	const formValues = useRef({ sel, other, confIdx, confSet }); formValues.current = { sel, other, confIdx, confSet };
 	useLayoutEffect(() => {
 		if (!viewReader) return;
 		const read = (): NativeQuestionViewState => {
-			const { sel, other, confIdx } = formValues.current;
+			const { sel, other, confIdx, confSet } = formValues.current;
 			return { question: qd, draft: { dontKnow: sel.dontKnow,
 				values: [...sel.selected].flatMap(index => qd.options[index] ? [qd.options[index]!.value] : []),
 				otherSelected: sel.otherSelected, other, text: answerTextRef.current, thinking: thinkingTextRef.current,
-				...(hasConfidence ? { confidence: CONFIDENCE_STOPS[confIdx] } : {}) } };
+				...(hasConfidence && confSet ? { confidence: CONFIDENCE_STOPS[confIdx] } : {}) } };
 		};
 		viewReader.current = read;
 		return () => { if (viewReader.current === read) viewReader.current = null; };
 	}, [viewReader, qd, kind, hasConfidence]);
 	const viewPresentationKey = JSON.stringify({ ...toClientQuestion(qd), questionType: qd.questionType });
-	useLayoutEffect(() => { viewReader?.changed?.(); }, [viewReader, sel, other, text, thinking, confIdx, viewPresentationKey]);
+	useLayoutEffect(() => { viewReader?.changed?.(); }, [viewReader, sel, other, text, thinking, confIdx, confSet, viewPresentationKey]);
 	const submit = () => {
 		if (!canSubmit || compactionRunning || preparing) return;
 		if (onPrepareSubmission) {
@@ -568,16 +574,16 @@ function QuestionDockForm({
 		void finishDictation().then(doSubmit);
 	};
 	const captureRequest = (): AnswerRequest => {
-		const { sel, other, confIdx } = formValues.current;
+		const { sel, other, confIdx, confSet } = formValues.current;
 		const req: AnswerRequest = {
 			dontKnow: sel.dontKnow,
 			values: [...sel.selected].map((i) => qd.options[i]!.value),
 			other: sel.otherSelected ? other : undefined,
 			text: qd.mode === "text" ? answerTextRef.current : undefined,
 			thinking: qd.mode !== "text" ? thinkingTextRef.current.trim() || undefined : undefined,
-			// Always sent on quiz and written answers (owner: 50 must mean 50,
-			// never "untouched"); buildAnswer drops it on "I don't know".
-			confidence: hasConfidence ? CONFIDENCE_STOPS[confIdx] : undefined,
+			// Sent only once the learner has set it (owner, 2026-11-18);
+			// buildAnswer drops it on "I don't know".
+			confidence: hasConfidence && confSet ? CONFIDENCE_STOPS[confIdx] : undefined,
 			elapsedSeconds: timer.read(),
 		};
 		// Snapshot before optimistic submission unmounts the form. Ref values
@@ -588,6 +594,7 @@ function QuestionDockForm({
 			other,
 			text: answerTextRef.current,
 			confidenceIndex: confIdx,
+			confidenceSet: confSet,
 		});
 		return req;
 	};
@@ -833,7 +840,7 @@ function QuestionDockForm({
 						Confidence
 					</span>
 					<div
-						className={cn(QC_CONFIDENCE_TRACK, sel.dontKnow && "opacity-40")}
+						className={cn(QC_CONFIDENCE_TRACK, (sel.dontKnow || !confSet) && "opacity-40")}
 						data-testid="confidence-track"
 					>
 						{/* The RAIL is painted here, not on the input: this overlay spans
@@ -860,8 +867,8 @@ function QuestionDockForm({
 							value={CONFIDENCE_STOPS[confIdx]}
 							disabled={sel.dontKnow}
 							aria-label={kind === "quiz" ? "Confidence — the probability your selected answer is correct" : "Confidence — the probability your answer is correct"}
-							aria-valuetext={`${CONFIDENCE_STOPS[confIdx]} percent`}
-							title={`The probability your ${kind === "quiz" ? "selected " : ""}answer is correct — 50% is a coin flip. Adjust with ←/→.`}
+							aria-valuetext={confSet ? `${CONFIDENCE_STOPS[confIdx]} percent` : "not set"}
+							title={`The probability your ${kind === "quiz" ? "selected " : ""}answer is correct — 50% is a coin flip. Not sent until you set it. Adjust with ←/→.`}
 							data-testid="confidence-slider"
 							onChange={(e) => {
 								// Snap to the nearest stop; the rendered VALUE is the stop's own
@@ -898,7 +905,7 @@ function QuestionDockForm({
 							sel.dontKnow && "text-muted-foreground/50",
 						)}
 					>
-						{sel.dontKnow ? "—" : `${CONFIDENCE_STOPS[confIdx]}%`}
+						{sel.dontKnow || !confSet ? "—" : `${CONFIDENCE_STOPS[confIdx]}%`}
 					</span>
 				</div>
 			</div>

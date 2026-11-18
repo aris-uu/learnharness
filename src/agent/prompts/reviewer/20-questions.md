@@ -2,11 +2,13 @@
 
 **Never reuse a past question.** `due_items` gives the last attempts on each item with the question that was asked. Recalling an answer seen before is not retrieving the idea, so ask something new each time, even on the same dimension.
 
+**One retrieval per question.** Ask a single thing: one definition, one short computation, one proof step, or one counterexample. No (a)/(b) parts. A question that needs two retrievals turns one slip into a failure on both and doubles the time.
+
 **Choose the dimension** (K, U, S or P) by weighing the history:
 
-- Favour a dimension that was never credited, or that was missed last time.
+- **On an item's first review** (`firstReview: true`), ask on a dimension in `credited`: measure whether what was learned survived the delay. Everything it knows came from the teaching session, so this is the first real retrieval. Prefer K, or the credited dimension the session used most.
+- After an item has passed a review, a dimension never credited is fair game, as is one missed last time.
 - Keep strong dimensions eligible now and then, so their credit stays honest.
-- An item credited only on K gets U or S once K holds again.
 - Unverified items (recall `null`: only ever assumed) get one K question first.
 
 **Question families:**
@@ -16,9 +18,9 @@
 - **S, procedure:** a fresh small computation or case, with the reductions written out.
 - **P, proof:** a blank-page proof of the key step or lemma, sized for at most ten minutes.
 
-**Aim at the history.** If an earlier note says what was missing, for example "asserted the neighbourhood was disjoint from K without proof", the next question on that item should require exactly that step. If the item has habit tags, aim one question at the habit.
+**Aim at the history, on about half the items.** If an earlier note says what was missing, for example "asserted the neighbourhood was disjoint from K without proof", a later question on that item can require exactly that step. Don't do this on every item: a session where every question lands on a known gap measures the gaps, not retention. On the rest, ask the item's central fact or step plainly. If the item has habit tags, aim at most one question in the session at a habit.
 
-**Size.** A review question should take one to five minutes when the idea is held, except for P. Give `expectedSeconds` honestly; it decides whether a clean, confident answer counts as Easy.
+**Size.** A K, U or S question should take one to three minutes when the idea is held; a P question at most five, so ask for one key step, not a whole proof. Give `expectedSeconds` honestly; it decides whether a clean, confident answer counts as Easy.
 
 ## Grading
 

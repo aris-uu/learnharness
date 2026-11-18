@@ -108,6 +108,8 @@ export interface ReviewCandidate {
 	/** Direct prerequisites (same teaching session) that are also due. */
 	duePrereqs: string[];
 	recentAgain: boolean;
+	/** No review event yet: everything known comes from the teaching session. */
+	firstReview: boolean;
 }
 
 const DAY_MS = 86_400_000;
@@ -153,6 +155,7 @@ export function reviewCandidates(input: {
 			habits,
 			duePrereqs: edges.filter((e) => e.to === item.nodeId && dueIds.has(sameChat(e.from))).map((e) => sameChat(e.from)),
 			recentAgain: lastReview?.rating === 1,
+			firstReview: !ownReviews.some((r) => r.kind === "review"),
 			prereqOfDue: edges.some((e) => e.from === item.nodeId && dueIds.has(sameChat(e.to))),
 			unverified: !item.state,
 		};
