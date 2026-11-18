@@ -73,6 +73,10 @@ function advance(
 		) {
 			phase = "plan";
 		}
+		// REVIEW sessions (retention mode, 2026-11-18) have no probe: picking
+		// the session's items is their planning, so a clean pick_items result
+		// plays probe_done's role.
+		if (phase === "probe" && part.type === "tool-pick_items" && part.state === "output-available") phase = "plan";
 		// plan → teach via the first nodeId-tagged quizzing CALL — quiz OR
 		// explain, whichever mechanic the settings armed (both carry nodeId).
 		if (
@@ -154,6 +158,9 @@ export function phaseAt3Lh(messages: readonly LhMessage[], upToIndex?: number): 
 		const role = (m as { role?: string }).role;
 		if (role === "toolResult") {
 			if (phase === "probe" && concluded.has(m.id)) phase = "plan";
+			// Review sessions: a clean pick_items result (see advance above).
+			const result = m as { toolName?: string; isError?: boolean };
+			if (phase === "probe" && result.toolName === "pick_items" && result.isError !== true) phase = "plan";
 		} else if (role === "assistant") {
 			const content = (m as { content?: ReadonlyArray<{ type?: string; name?: string; arguments?: unknown }> }).content ?? [];
 			if (phase === "plan") {

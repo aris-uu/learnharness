@@ -41,7 +41,20 @@ Before teaching after an "I don't know", the tutor asks once what you would try 
 
 ### Memory: forgetting curves
 
-Every node with math-mode evidence gets a forgetting curve (FSRS-6, default parameters, 85% target recall). It is derived from the ledger each time it is read, so nothing extra is stored. A solid node starts at Good when it was reached without hints, otherwise at Hard; a node still in progress starts at Again; a node that was only assumed is *unverified*. `search_evidence` reports each result's `memory`: its recall now, when it is due, and `stale` when it was solid but has probably been forgotten. The prober and the tutor then re-test it with one short recall instead of assuming it. **Memory** in the sidebar lists the items most forgotten first, with a sparkline for each. Design and later phases: [retention-mode-plan.md](retention-mode-plan.md).
+Every node with math-mode evidence gets a forgetting curve (FSRS-6, default parameters, 85% target recall). It is derived from the ledger each time it is read, so nothing extra is stored. A solid node starts at Good when it was reached without hints, otherwise at Hard; a node still in progress starts at Again; a node that was only assumed is *unverified*. `search_evidence` reports each result's `memory`: its recall now, when it is due, and `stale` when it was solid but has probably been forgotten. The prober and the tutor then re-test it with one short recall instead of assuming it. **Memory** in the sidebar (with a due count) lists the items most forgotten first, with a sparkline for each.
+
+### Review sessions
+
+**Start review** on the Memory page opens today's review session (one per day, titled `Review YYYY-MM-DD`). The reviewer lists the due items (`due_items`), picks about six (`pick_items`), which become the session's map, and asks one fresh written question per item, never one asked before. It grades each with `record_review`, and the server turns the grade into an FSRS rating:
+
+| Grade | Rating |
+|---|---|
+| incorrect, 2+ hints, or a partial missing the load-bearing step | Again |
+| a minor partial, slow, or 1 hint | Hard |
+| correct, unaided | Good |
+| correct, unaided, ≥ 90% confident and within the expected time | Easy |
+
+Only the first attempt on an item in a session moves its schedule. After an Again the reviewer gives one short repair and one retry on a different question, which is logged but not scheduled; the item comes back no sooner than a day later. Reviews are appended to `memory/reviews.jsonl` in the data folder, and every curve is replayed from the evidence ledger plus that log. Review sessions extract nothing into the graph. Design and later phases: [retention-mode-plan.md](retention-mode-plan.md).
 
 ## Going back
 

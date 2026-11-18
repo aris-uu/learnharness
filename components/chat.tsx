@@ -275,6 +275,7 @@ export function Chat({
 	initiallyCompacting = false,
 	initialConfigured = false,
 	kind = "teach",
+	review = false,
 }: {
 	chatId: string;
 	title: string;
@@ -285,6 +286,9 @@ export function Chat({
 	 *  renders no phase chip (no probe→teach arc applies) and a Practice
 	 *  tag rides the header instead. */
 	kind?: "teach" | "practice";
+	/** A review session (retention mode, 2026-11-18): teach-shaped, but with
+	 *  no math-mode toggle and no extraction coverage (nothing is extracted). */
+	review?: boolean;
 	initialPrompt?: string;
 	/** A teacher turn is running server-side but attached to no client
 	 * (navigated away mid-turn, returned while in flight). */
@@ -1737,7 +1741,7 @@ export function Chat({
 						</button>
 </Hint>
 					)}
-					{kind !== "practice" && <SessionMathModeToggle chatId={chatId} profile={teachingProfile} onChange={setTeachingProfile} />}
+					{kind !== "practice" && !review && <SessionMathModeToggle chatId={chatId} profile={teachingProfile} onChange={setTeachingProfile} />}
 					{teachingProfile === "math" && planTree && (
 						<GoBackMenu tree={planTree} current={planCurrent} messages={nativeMessages} disabled={busy} onPick={(node) => void goBackTo(node)} />
 					)}
@@ -1748,7 +1752,7 @@ export function Chat({
 					{/* Practice (owner, 2026-10-04): the coverage ring hides —
 				    practice never extracts, so an ever-filling ring with no
 				    run behind it would lie. */}
-					{kind !== "practice" && <CoverageRing chatId={chatId} refreshKey={coverageTick} />}
+					{kind !== "practice" && !review && <CoverageRing chatId={chatId} refreshKey={coverageTick} />}
 					{/* Practice sessions: no phase arc — a quiet Practice tag
 					    instead of the phase chip. */}
 					{kind === "practice" ? (

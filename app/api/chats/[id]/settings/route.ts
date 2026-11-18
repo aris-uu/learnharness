@@ -56,7 +56,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 	const { id } = await params;
 	const chat = getChat(id);
 	if (!chat) return Response.json({ error: "Not found" }, { status: 404 });
-	if (chat.kind === "practice") return Response.json({ error: "Practice sessions have no teaching profile" }, { status: 400 });
+	if (chat.kind === "practice" || chat.kind === "review") return Response.json({ error: "Practice and review sessions have no teaching profile" }, { status: 400 });
 	const body = (await req.json().catch(() => null)) as { profile?: unknown } | null;
 	const requested = body?.profile;
 	if (requested !== null && !TEACHING_PROFILES.includes(requested as TeachingProfile)) {
