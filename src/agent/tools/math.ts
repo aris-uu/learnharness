@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { derivePlanStatusesLh } from "../../core/contracts/plan.ts";
 import {
+	answeredWrittenQuestions,
 	attemptedNodes,
 	blockingPrerequisites,
 	evidenceFromMessages,
@@ -36,9 +37,12 @@ const recordEvidenceInput = Type.Object({
 	habits: Type.Optional(Type.Array(literals(MATH_HABITS), {
 		description: "When the attempt fell short (partial, incorrect, or credit that needed a hint): which recurring habit caused it. Omit when none applies.",
 	})),
+	probeAnswer: Type.Optional(Type.String({
+		description: "For evidence from this session's probe, asked before the map existed: the tool-call id of the probe question (explain or recall) whose written answer shows this. Lets a probe-proven node earn credit instead of being recorded as assumed.",
+	})),
 });
 
-type EvidenceInput = { nodeId: string; dimension: MathEvidence["dimension"]; outcome: MathEvidence["outcome"]; hints: number; note: string; habits?: unknown };
+type EvidenceInput = { nodeId: string; dimension: MathEvidence["dimension"]; outcome: MathEvidence["outcome"]; hints: number; note: string; habits?: unknown; probeAnswer?: string };
 
 const CONCEAL_PROBLEM = "Math mode keeps the committed answer hidden so the attempt can continue: set conceal to true.";
 
@@ -143,8 +147,8 @@ export function mathTeacherTools(ctx: MathToolContext) {
 		description:
 			"Record what the learner's latest written attempt demonstrated. Call it after judging an attempt, once per dimension shown. " +
 			"K = stated the definition or theorem, U = explained why or what breaks, S = used it on a case, P = produced a proof or key step. " +
-			"correct and correct_slow require a submitted written attempt on this node. " +
-			"assumed = not tested, justified by direct probe evidence. learner_override = the learner explicitly chose to move on.",
+			"correct and correct_slow require a submitted written attempt on this node, or `probeAnswer` naming the probe question whose answer showed it. " +
+			"assumed = not tested here, justified by indirect evidence. learner_override = the learner explicitly chose to move on.",
 		parameters: recordEvidenceInput,
 		executionMode: "sequential",
 		execute: async (toolCallId, input) => {
@@ -153,10 +157,13 @@ export function mathTeacherTools(ctx: MathToolContext) {
 			if (!tree?.nodes.some((node) => node.id === entry.nodeId)) {
 				return invalidInputResult(RECORD_EVIDENCE_TOOL, [`nodeId "${entry.nodeId}" matches no node in this session's plan map.`]);
 			}
-			if ((entry.outcome === "correct" || entry.outcome === "correct_slow") && !attemptedNodes(messages).has(entry.nodeId)) {
-				return invalidInputResult(RECORD_EVIDENCE_TOOL, [`No submitted written attempt exists on ${entry.nodeId}, so it cannot earn credit.`]);
+			if (entry.probeAnswer !== undefined && !answeredWrittenQuestions(messages).has(entry.probeAnswer)) {
+				return invalidInputResult(RECORD_EVIDENCE_TOOL, [`probeAnswer "${entry.probeAnswer}" is not an answered written question (explain or recall) in this session. Copy the tool-call id of the probe question.`]);
 			}
-			const { habits: rawHabits, ...rest } = entry;
+			if ((entry.outcome === "correct" || entry.outcome === "correct_slow") && entry.probeAnswer === undefined && !attemptedNodes(messages).has(entry.nodeId)) {
+				return invalidInputResult(RECORD_EVIDENCE_TOOL, [`No submitted written attempt exists on ${entry.nodeId}, so it cannot earn credit. If this session's probe tested it, pass that question's tool-call id as probeAnswer.`]);
+			}
+			const { habits: rawHabits, probeAnswer: _probeAnswer, ...rest } = entry;
 			const habits = habitsOf(rawHabits);
 			const saved: MathEvidence = { ...rest, id: toolCallId, ...(habits ? { habits } : {}) };
 			thisRun.push(saved);

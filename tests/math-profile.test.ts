@@ -144,6 +144,20 @@ describe("math tools", () => {
 		const passed = await tools.explain!.execute("z", { ...explainArgs, nodeId: "b", conceal: true });
 		assert.doesNotMatch(JSON.stringify(passed), /Mastery gate/);
 	});
+	it("credits a node from this session's probe answer, and only from an answered written one", async () => {
+		const probe = { messages: [
+			{ role: "assistant", content: [{ type: "toolCall", id: "p1", name: "recall", arguments: { question: "State it" } }, { type: "toolCall", id: "p2", name: "recall", arguments: { question: "And this?" } }] },
+			{ role: "toolResult", toolCallId: "p1", toolName: "recall", content: [{ type: "text", text: JSON.stringify({ text: "the statement" }) }] },
+			{ role: "toolResult", toolCallId: "p2", toolName: "recall", content: [{ type: "text", text: JSON.stringify({ dontKnow: true }) }] },
+		] as unknown[], tree };
+		const probeCtx = { chatId: "c", chatStore: { getChat: () => probe }, jobStore: {}, spawn: () => {}, searchAvailable: () => false } as never;
+		const tools = createTeacherTools(probeCtx, undefined, "math");
+		const entry = { nodeId: "a", dimension: "K", outcome: "correct", hints: 0, note: "probe: stated it" };
+		assert.match(JSON.stringify(await tools.record_evidence!.execute("e0", { ...entry, probeAnswer: "p2" })), /not an answered written question/, "I don't know is no attempt");
+		assert.match(JSON.stringify(await tools.record_evidence!.execute("e1", { ...entry, probeAnswer: "nope" })), /not an answered written question/);
+		const credited = await tools.record_evidence!.execute("e2", { ...entry, probeAnswer: "p1" });
+		assert.equal((credited as { details: { ok?: boolean } }).details.ok, true);
+	});
 	it("hides a concealed answer on the card", () => {
 		const answer = { kind: "explain" } as QuestionAnswerData;
 		assert.equal(answerForPresentation(answer, { question: "q", correctAnswer: "secret", conceal: true }).committed, undefined);
