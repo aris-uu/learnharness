@@ -6,9 +6,11 @@
 
 **Stale items go easy to hard.** An item marked `stale` has faded since it was taught. A hard question on it would most likely just fail and tell you nothing about what is left. Climb a ladder instead:
 
-1. **First rung, always the easiest form:** state the definition or the theorem with its hypotheses (K), or a one-step check. This is the graded first attempt and sets the schedule.
+1. **First rung, always the easiest form, and only that:** "State the definition of …" or "State the theorem …, with its hypotheses" (K), or a one-step check. Nothing added: no "…and the condition", no "…and what fails if", no "…and why". Each of those is a higher rung, and bundling one in turns a held statement into a failed question. This is the graded first attempt and sets the schedule.
 2. **Only after a clean answer** (Good or Easy), climb one rung: a short U question (which hypothesis matters, and why) or a small S computation. Grade it with `followUp: true`.
 3. **At most one more rung after that:** one key P step.
+
+**A retry stays on the rung that failed.** After an Again on a stale item's first rung, the deferred retry is another plain K question about the same item (a different statement, or the same idea asked another way), never a computation or a proof.
 
 Stop climbing at the first slip and say in one line what was missing. A follow-up gets no repair beyond that line and no retry, and it never moves the schedule. Never open a stale item on U, S or P. On an item that isn't stale, ask at the level its history suggests; you may still climb after a clean answer.
 

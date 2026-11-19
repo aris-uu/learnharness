@@ -187,6 +187,14 @@ export function reviewTools(ctx: ReviewToolContext) {
 			const before = memorySnapshot(ctx.evidenceStore.list(), t, { reviews }).find((item) => item.id === itemId);
 			const followUp = input.followUp === true;
 			const retry = !followUp && onItem.length > 0;
+			// NOTHING TO INTERLEAVE (owner, 2026-11-19): an Again on the last
+			// first attempt, with no other retry still owed, would be retried
+			// straight after its repair, which measures the repair. Skip it:
+			// the item is due again within a day, and that review is the retry.
+			const sessionSoFar = reviews.filter((e) => e.chatId === ctx.chatId);
+			const queueBefore = retryQueue(sessionSoFar, [...(picks()?.values() ?? [])]);
+			const lastFirst = !followUp && !retry && queueBefore.remaining.length === 1 && queueBefore.remaining[0] === itemId;
+			const nothingToInterleave = lastFirst && queueBefore.waiting.length === 0 && queueBefore.ready.length === 0;
 			const rating = ratingFor(input);
 			const habits = habitsOf(input.habits);
 			const event: ReviewEvent = {
@@ -199,7 +207,7 @@ export function reviewTools(ctx: ReviewToolContext) {
 				...(input.expectedSeconds !== undefined ? { expectedSeconds: input.expectedSeconds } : {}),
 				question: input.question, note: input.note,
 				...(habits ? { habits } : {}),
-				...(input.noRetry && rating === 1 ? { noRetry: true } : {}),
+				...((input.noRetry || nothingToInterleave) && rating === 1 ? { noRetry: true } : {}),
 				...(before?.state ? { predicted: Math.round(retrievabilityAt(before.state, t) * 1000) / 1000 } : {}),
 			};
 			ctx.reviewStore.append(event);
@@ -210,7 +218,7 @@ export function reviewTools(ctx: ReviewToolContext) {
 			const queue = retryQueue([...reviews, event].filter((e) => e.chatId === ctx.chatId), [...slugs.values()]);
 			const names = (ids: readonly string[]) => ids.map((id) => slugOf.get(id) ?? id).join(", ");
 			const nextStep = queue.ready.length
-				? `Now ask the deferred retry on ${names(queue.ready.slice(0, 1))}: a DIFFERENT question from both earlier ones, with no reminder of the repair.`
+				? `Now ask the deferred retry on ${names(queue.ready.slice(0, 1))}: a DIFFERENT question from both earlier ones, at the same rung as the one that failed (for a stale item, another plain K question), with no reminder of the repair.`
 				: queue.remaining.length
 					? "Move to the next item."
 					: "All items and retries are done: close the session.";
@@ -224,7 +232,9 @@ export function reviewTools(ctx: ReviewToolContext) {
 				? rating === 1
 					? `The retry also failed. Stop drilling this item: note it for a teach session (offer it in the closing summary). ${nextStep}`
 					: `Retry logged; it does not move the schedule. ${nextStep}`
-				: rating === 1 && event.noRetry
+				: rating === 1 && event.noRetry && !input.noRetry
+					? `Again: give one short repair aimed at the exact gap, but no retry. Nothing is left to interleave, so a retry now would only test the repair; the item comes back in the next review. ${nextStep}`
+					: rating === 1 && event.noRetry
 					? `No retry: the learner says this isn't consolidated. Give at most a one-line pointer, note it for a teach session in the closing summary, and move on. ${nextStep}`
 					: rating === 1
 					? queue.ready[0] === itemId

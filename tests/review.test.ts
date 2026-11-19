@@ -203,11 +203,13 @@ describe("reviewer tools", () => {
 		const first = await call("record_review", grade, "g1");
 		assert.equal(first.details.rating, "Again");
 		assert.equal(first.details.kind, "review");
-		assert.match(first.details.instruction, /DIFFERENT question/);
+		assert.match(first.details.instruction, /no retry/, "the only item: nothing to interleave, so no retry this session");
+		assert.deepEqual(first.details.retries, { waiting: [], ready: [] });
 		assert.ok(Date.parse(first.details.nextDue) >= T0 + 61 * DAY - 1000);
 		const retry = await call("record_review", { ...grade, outcome: "correct", question: "State the tube lemma" }, "g2");
 		assert.equal(retry.details.kind, "retry");
 		assert.deepEqual(reviews.map((e) => [e.kind, e.rating]), [["review", 1], ["retry", 3]]);
+		assert.equal(reviews[0]!.noRetry, true);
 		assert.ok(reviews[0]!.predicted! < 0.85);
 	});
 });

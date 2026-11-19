@@ -129,6 +129,31 @@ export function attemptedNodes(messages: readonly unknown[]): Set<string> {
 	return attempted;
 }
 
+/** Written questions whose answers can carry credit. */
+const WRITTEN_QUESTION_TOOLS = new Set(["explain", "recall"]);
+
+/**
+ * The tool-call ids of written questions (explain or recall) the learner
+ * actually answered in this record, tagged or not. A probe asks before the
+ * plan exists, so its questions carry no nodeId; record_evidence may cite
+ * one of these ids as `probeAnswer` to credit a node the probe tested
+ * (owner, 2026-11-19: probe-proven prerequisites were landing as assumed,
+ * which leaves them without a forgetting curve).
+ */
+export function answeredWrittenQuestions(messages: readonly unknown[]): Set<string> {
+	const answered = new Set<string>();
+	for (const raw of messages as RecordMessage[]) {
+		if (raw?.role !== "toolResult" || !WRITTEN_QUESTION_TOOLS.has(raw.toolName as string) || raw.isError === true || !Array.isArray(raw.content)) continue;
+		const text = (raw.content as Array<{ text?: unknown }>)[0]?.text;
+		if (typeof text !== "string" || typeof raw.toolCallId !== "string") continue;
+		try {
+			const answer = JSON.parse(text) as { dontKnow?: unknown; dismissed?: unknown };
+			if (answer.dontKnow !== true && answer.dismissed !== true) answered.add(raw.toolCallId);
+		} catch { /* An unparseable result is not evidence of an attempt. */ }
+	}
+	return answered;
+}
+
 function isCredited(entry: MathEvidence): boolean {
 	return (entry.outcome === "correct" || entry.outcome === "correct_slow") && entry.hints <= 1;
 }
