@@ -56,7 +56,7 @@ const STORAGE_KEY = "lh:sidebar-open";
 import type { ChatGPTControlBridge, NativeSubscriptionControlBridge } from "@/src/core";
 import type { UpdateState } from "@/components/settings/update-settings.tsx";
 import { FilePathDropZone } from "@/components/file-path-drop-zone";
-import { NEW_REVIEW_HREF, useMemoryDue } from "@/components/start-review";
+import { NEW_REVIEW_HREF, useMemoryDueSplit } from "@/components/start-review";
 const SIDEBAR_AUTOCLOSE = 928;
 
 // Module scope, guarded for SSR (the server has no navigator).
@@ -405,7 +405,7 @@ const KIND_FILTER_KEY = "lh:session-kind-filter";
 
 function SessionsSidebar() {
 	const interactions = useInteractionLayers();
-	const memoryDue = useMemoryDue();
+	const { due: memoryDue, split: memorySplit } = useMemoryDueSplit();
 	const { open, toggle } = useSidebar();
 	const [chats, setChats] = useState<ChatListItem[] | null>(null);
 	const [query, setQuery] = useState("");
@@ -879,7 +879,7 @@ function SessionsSidebar() {
 							>
 								<BrainIcon className="size-3" />
 								Memory
-								{memoryDue ? <span data-testid="memory-due-badge" className="ml-0.5 rounded-sm bg-accent px-1 font-mono text-[10px] normal-case tracking-normal text-foreground">{memoryDue}</span> : null}
+								{memoryDue ? <span data-testid="memory-due-badge" title={memorySplit ? `${memorySplit.learning} to consolidate, ${memorySplit.mature} to review` : undefined} className="ml-0.5 rounded-sm bg-accent px-1 font-mono text-[10px] normal-case tracking-normal text-foreground">{memoryDue}</span> : null}
 							</Link>
 						</Hint>
 						<Hint label="Settings" action="open-settings" side="right">

@@ -8,12 +8,21 @@
  * Design: docs/retention-mode-plan.md (§3–§5).
  */
 import { MATH_DIMENSIONS, nodeStatus, type EvidenceRecord, type MathDimension, type MathNodeStatus } from "../math-evidence.ts";
-import { dueAt, rateFsrs, retrievabilityAt, type FsrsRating, type FsrsState } from "./fsrs.ts";
+import { daysTo90, dueAt, rateFsrs, retrievabilityAt, type FsrsRating, type FsrsState, type FsrsWeights, type TrainingReview } from "./fsrs.ts";
 
 /** Recall probability the schedule aims to keep each item above. Lower
  *  than flashcards' 0.90: a fresh tutor-made question is harder than a
  *  fixed card, and each review costs a model turn. */
 export const DEFAULT_DESIRED_RETENTION = 0.85;
+/** Anki's "mature" line (docs/consolidation-sessions-plan.md): only mature
+ *  items are reviewed; younger ones go to consolidation sittings. Measured as
+ *  days until recall falls to 90% (daysTo90), which is what FSRS-6 stability
+ *  meant; FSRS-7's own stability field no longer does (docs/fsrs7-plan.md §2). */
+export const MATURE_STABILITY_DAYS = 21;
+export type MemoryStage = "learning" | "mature";
+export const memoryStage = (item: { state?: FsrsState | null; daysTo90?: number | null }, weights?: FsrsWeights): MemoryStage =>
+	// A snapshot already carries daysTo90, read with the weights it was built with.
+	item.state && (typeof item.daysTo90 === "number" ? item.daysTo90 : daysTo90(item.state, weights)) >= MATURE_STABILITY_DAYS ? "mature" : "learning";
 
 /** Plan node ids are per-chat slugs, so an item is keyed by both. */
 export const memoryItemId = (chatId: string, nodeId: string) => `${chatId}#${nodeId}`;
@@ -54,6 +63,8 @@ export interface MemoryItem {
 }
 
 export interface MemoryItemSnapshot extends MemoryItem {
+	/** Days from the last review until recall falls to 90% (the shown "stability"); null without a schedule. */
+	daysTo90: number | null;
 	/** Recall probability now (0 for unverified items, which are due now). */
 	retrievability: number;
 	/** ISO time the item falls below the desired retention. */
@@ -101,19 +112,19 @@ export function seedFor(records: readonly EvidenceRecord[]): { status: MemoryIte
 }
 
 /** Replay events into an FSRS state; retries never move the schedule. */
-export function replay(events: readonly MemoryEvent[]): FsrsState | undefined {
+export function replay(events: readonly MemoryEvent[], weights?: FsrsWeights): FsrsState | undefined {
 	let state: FsrsState | null = null;
 	for (const event of [...events].sort((a, b) => ms(a.at) - ms(b.at))) {
 		if (event.kind === "retry" || event.kind === "followup") continue;
 		const at = ms(event.at);
 		if (!Number.isFinite(at)) continue;
-		state = rateFsrs(state, event.rating, at);
+		state = rateFsrs(state, event.rating, at, weights);
 	}
 	return state ?? undefined;
 }
 
 /** Every memory item the evidence implies, with `reviews` (phase 2) replayed on top. */
-export function memoryItems(records: readonly EvidenceRecord[], reviews: readonly MemoryEvent[] = []): MemoryItem[] {
+export function memoryItems(records: readonly EvidenceRecord[], reviews: readonly MemoryEvent[] = [], weights?: FsrsWeights): MemoryItem[] {
 	const groups = new Map<string, EvidenceRecord[]>();
 	for (const record of records) {
 		const id = memoryItemId(record.chatId, record.nodeId);
@@ -137,7 +148,7 @@ export function memoryItems(records: readonly EvidenceRecord[], reviews: readonl
 			...(seed.rating && seed.at ? [{ itemId: id, at: seed.at, kind: "seed" as const, rating: seed.rating }] : []),
 			...(reviewsBy.get(id) ?? []),
 		].sort((a, b) => ms(a.at) - ms(b.at));
-		const state = replay(events);
+		const state = replay(events, weights);
 		items.push({
 			id,
 			chatId: latest.chatId,
@@ -158,15 +169,16 @@ export function memoryItems(records: readonly EvidenceRecord[], reviews: readonl
 }
 
 /** An item's curve read at `nowMs`. */
-export function snapshotItem(item: MemoryItem, nowMs: number, retention = DEFAULT_DESIRED_RETENTION): MemoryItemSnapshot {
+export function snapshotItem(item: MemoryItem, nowMs: number, retention = DEFAULT_DESIRED_RETENTION, weights?: FsrsWeights): MemoryItemSnapshot {
 	if (!item.state) {
-		return { ...item, retrievability: 0, dueAt: new Date(nowMs).toISOString(), due: true, stale: false };
+		return { ...item, daysTo90: null, retrievability: 0, dueAt: new Date(nowMs).toISOString(), due: true, stale: false };
 	}
-	const r = retrievabilityAt(item.state, nowMs);
+	const r = retrievabilityAt(item.state, nowMs, weights);
 	const lastRating = [...item.events].reverse().find((e) => e.kind === "seed" || e.kind === "review")?.rating;
-	const due = dueAt(item.state, retention, lastRating);
+	const due = dueAt(item.state, retention, lastRating, undefined, weights);
 	return {
 		...item,
+		daysTo90: daysTo90(item.state, weights),
 		retrievability: r,
 		dueAt: new Date(due).toISOString(),
 		due: nowMs >= due,
@@ -175,29 +187,48 @@ export function snapshotItem(item: MemoryItem, nowMs: number, retention = DEFAUL
 }
 
 /** All items read at `nowMs`, most forgotten first. */
-export function memorySnapshot(records: readonly EvidenceRecord[], nowMs: number, options: { reviews?: readonly MemoryEvent[]; retention?: number } = {}): MemoryItemSnapshot[] {
-	return memoryItems(records, options.reviews)
-		.map((item) => snapshotItem(item, nowMs, options.retention))
+export function memorySnapshot(records: readonly EvidenceRecord[], nowMs: number, options: { reviews?: readonly MemoryEvent[]; retention?: number; weights?: FsrsWeights } = {}): MemoryItemSnapshot[] {
+	return memoryItems(records, options.reviews, options.weights)
+		.map((item) => snapshotItem(item, nowMs, options.retention, options.weights))
 		.sort((a, b) => a.retrievability - b.retrievability || a.title.localeCompare(b.title));
 }
 
 /** Points of an item's recall curve from its first event to `untilMs`, for
  *  sparklines: `[epochMs, recall]`, with a vertical drop/rise at each review. */
-export function curvePoints(item: MemoryItem, untilMs: number, samplesPerSegment = 24): Array<[number, number]> {
+export function curvePoints(item: MemoryItem, untilMs: number, samplesPerSegment = 24, weights?: FsrsWeights): Array<[number, number]> {
 	const moving = item.events.filter((e) => e.kind === "seed" || e.kind === "review").sort((a, b) => ms(a.at) - ms(b.at));
 	const points: Array<[number, number]> = [];
 	let state: FsrsState | null = null;
 	for (let i = 0; i < moving.length; i++) {
 		const at = ms(moving[i]!.at);
-		if (state) points.push([at, retrievabilityAt(state, at)]);
-		state = rateFsrs(state, moving[i]!.rating, at);
+		if (state) points.push([at, retrievabilityAt(state, at, weights)]);
+		state = rateFsrs(state, moving[i]!.rating, at, weights);
 		const end = i + 1 < moving.length ? ms(moving[i + 1]!.at) : untilMs;
 		for (let k = 0; k <= samplesPerSegment; k++) {
 			const t = at + (Math.max(end, at) - at) * (k / samplesPerSegment);
-			points.push([t, retrievabilityAt(state, t)]);
+			points.push([t, retrievabilityAt(state, t, weights)]);
 		}
 	}
 	return points;
+}
+
+/** FSRS training items from memory items (docs/fsrs7-plan.md §3): each
+ *  item's seed and review events, oldest first (retries and follow-ups never
+ *  move the schedule, so they are not training data); every prefix of two or
+ *  more events is one item. */
+export function trainingItems(items: readonly MemoryItem[]): TrainingReview[][] {
+	const out: TrainingReview[][] = [];
+	for (const item of items) {
+		const moving = item.events
+			.filter((e) => (e.kind === "seed" || e.kind === "review") && Number.isFinite(ms(e.at)))
+			.sort((a, b) => ms(a.at) - ms(b.at));
+		const reviews = moving.map((e, i): TrainingReview => ({
+			rating: e.rating,
+			deltaT: i === 0 ? 0 : Math.max(0, (ms(e.at) - ms(moving[i - 1]!.at)) / 86_400_000),
+		}));
+		for (let k = 2; k <= reviews.length; k++) out.push(reviews.slice(0, k));
+	}
+	return out;
 }
 
 /** One row of the memory view (server/memory.ts builds it, the page renders it). */

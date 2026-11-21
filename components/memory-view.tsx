@@ -85,7 +85,7 @@ export function MemoryTable({ view, filter, action }: { view: MemoryView; filter
 								</td>
 								<td className="py-2 pr-3"><RecallSparkline item={item} now={view.now} retention={view.retention} /></td>
 								<td className="py-2 pr-3 text-xs">{item.status === "unverified" ? "verify" : relativeDays(view.now, Date.parse(item.dueAt))}</td>
-								<td className="py-2 pr-3 font-mono text-xs tabular-nums">{item.state ? `${item.state.stability.toFixed(1)}d` : "—"}</td>
+								<td className="py-2 pr-3 font-mono text-xs tabular-nums">{item.daysTo90 != null ? `${item.daysTo90.toFixed(1)}d` : "—"}</td>
 								<td className="py-2 font-mono text-xs">{item.credited.join(" ") || "—"}</td>
 							</tr>
 						))}

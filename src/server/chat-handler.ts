@@ -13,6 +13,7 @@ import { nativeSubscriptionError } from "../agent/subscription-stream.ts";
 import { chatGPTStreamError } from "../agent/chatgpt-stream.ts";
 import { SubscriptionRequestCycle, type SubscriptionDispatchLifecycle } from "../agent/subscription-request-cycle.ts";
 import { reconstructRequestCause } from "../core/native-messages.ts";
+import { resumedAfterHours } from "../core/session-clock.ts";
 import { createJobRunner } from "../agent/subagents/runner.ts";
 import { createExtractionPipeline } from "../agent/subagents/extraction.ts";
 import type { ModelRole } from "../../config.ts";
@@ -732,6 +733,11 @@ export async function handleChatInput(
 		// prompt fresh per turn, swapping in any enabled override segments.
 		promptSwitches: effective.agent.prompts,
 		...(record.kind !== "practice" && record.settings?.profile ? { profile: record.settings.profile } : {}),
+		...(record.kind !== "practice" && record.settings?.timeboxMin ? {
+			timeboxMin: record.settings.timeboxMin + (record.settings.timebox?.extendedMin ?? 0),
+			resumedHours: record.settings.timebox?.closedAt ? null : resumedAfterHours(record.messages, Date.now()),
+		} : {}),
+		...(record.kind === "review" && record.settings?.consolidate ? { consolidate: true } : {}),
 	};
 	// PRACTICE BRANCH (owner design, 2026-10-04): a kind:"practice"
 	// session builds the practitioner from turn 1 — no prober→teacher
@@ -742,7 +748,7 @@ export async function handleChatInput(
 		? buildAgent({ ...agentOpts, teaching })
 		: record.kind === "review"
 			? createReviewerAgent(
-					{ chatId, chatStore: stores.chatStore, evidenceStore: stores.evidenceStore, reviewStore: stores.reviewStore },
+					{ chatId, chatStore: stores.chatStore, evidenceStore: stores.evidenceStore, reviewStore: stores.reviewStore, weightsStore: stores.fsrsWeightsStore },
 					agentOpts,
 				)
 		: record.kind === "practice"
@@ -781,6 +787,7 @@ export async function handleChatInput(
 						searchAvailable,
 						evidenceStore: stores.evidenceStore,
 						reviewStore: stores.reviewStore,
+						weightsStore: stores.fsrsWeightsStore,
 					},
 					agentOpts,
 				)
@@ -801,6 +808,7 @@ export async function handleChatInput(
 						...(graphToolsEnabled(effective) ? { graphStore: stores.graphStore } : {}),
 						evidenceStore: stores.evidenceStore,
 						reviewStore: stores.reviewStore,
+						weightsStore: stores.fsrsWeightsStore,
 					},
 					agentOpts,
 				);

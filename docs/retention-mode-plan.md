@@ -76,7 +76,7 @@ Store port and fs adapter: copy the `EvidenceStore` pattern (`src/core/math-evid
 
 ## 4. Forgetting curve
 
-FSRS-6 tracks **one schedule per item**. The K/U/S/P dimensions play the role the flashcards plugin gives to cues: they are different ways in to the same item. Each review picks which dimension to test (see §6).
+FSRS tracks **one schedule per item** (FSRS-7 via ts-fsrs since 2026-11-21, see [fsrs7-plan.md](fsrs7-plan.md); this section describes the original FSRS-6 port). The K/U/S/P dimensions play the role the flashcards plugin gives to cues: they are different ways in to the same item. Each review picks which dimension to test (see §6).
 
 - Port the core of `scheduler.cjs` to `src/core/memory/fsrs.ts` as a typed module: `W`, `DECAY`, `FACTOR`, `initDifficulty`, `nextDifficulty`, `reviewStability`, and retrievability `R(t,S) = (1 + FACTOR·t/S)^DECAY`. Drop the minute learning steps and the study-day boundaries, which don't fit tutor sessions. Keep the MIT attribution. The plugin stays self-contained, per its own design rule, so a small amount of math gets duplicated.
 - `replay(events) → { stability, difficulty, lastReview, due, R(now) }` per item.
@@ -113,6 +113,8 @@ The tutor gives `loadBearing` for a partial: was the missing piece the step that
 Only the **first** attempt on an item in a session moves the schedule. The repair and retry after an Again are logged as `retry` and don't count, so re-teaching within the session can't inflate stability. The next review after an Again comes back no sooner than 1 day later.
 
 ## 6. Session flow: the new "review" kind
+
+> **Proposed change (2026-11-20):** review only mature items (stability ≥ 21 days); items still in learning go to time-boxed consolidation sittings instead. See [consolidation-sessions-plan.md](consolidation-sessions-plan.md).
 
 `ChatKind = "teach" | "practice" | "review"`. Review is a separate kind, not a profile. `composeInstructions` skips profiles for practice, and review needs its own toolset and its own stop rules. Prompts go in `src/agent/prompts/review/`, plus the shared segments. Session title: `Review YYYY-MM-DD`, one chat per day, so history stays readable.
 
@@ -164,7 +166,7 @@ Only the **first** attempt on an item in a session moves the schedule. The repai
 3. Doctrine: a stuck-point request on idk; the pre-submit checklist shown before P questions; the hypothesis-drop family; a soft re-plan warning.
 
 **Phase 1: memory core (read only for you)**
-**Built (2026-11-18):** `src/core/memory/fsrs.ts` (FSRS-6 with the ts-fsrs 5.2.3 defaults) and `src/core/memory/items.ts` (seeding, replay, snapshot, curve points), all derived from the ledger with no stored state; `search_evidence` returning `memory: {recall, dueAt, stale}` or `{unverified: true}`; prober/teacher doctrine to re-test stale items; and the read-only Memory view at `/memory` (sidebar → Memory) via `src/server/memory.ts` and `components/memory-view.tsx`. Tests: `tests/memory.test.ts`, `tests/render-memory-view.test.tsx`, and a case in `tests/evidence-ledger.test.ts`. `src/store/memory.ts` and the rating table move to phase 2, where reviews first exist.
+**Built (2026-11-18):** `src/core/memory/fsrs.ts` (FSRS-6 with the ts-fsrs 5.2.3 defaults; replaced 2026-11-21 by a wrapper over ts-fsrs 6.0.0 FSRS-7, [fsrs7-plan.md](fsrs7-plan.md)) and `src/core/memory/items.ts` (seeding, replay, snapshot, curve points), all derived from the ledger with no stored state; `search_evidence` returning `memory: {recall, dueAt, stale}` or `{unverified: true}`; prober/teacher doctrine to re-test stale items; and the read-only Memory view at `/memory` (sidebar → Memory) via `src/server/memory.ts` and `components/memory-view.tsx`. Tests: `tests/memory.test.ts`, `tests/render-memory-view.test.tsx`, and a case in `tests/evidence-ledger.test.ts`. `src/store/memory.ts` and the rating table move to phase 2, where reviews first exist.
 
 **Phase 2: review kind**
 **Built (2026-11-18):** `ChatKind` `"review"` and the `reviewer` agent (`createReviewerAgent`, prompts in `src/agent/prompts/reviewer/`, composed like practice with a curated shared appendix); `src/agent/tools/review.ts` (`due_items`, `pick_items`, `record_review`; `explain` concealed and tagged with the picked item's slug); `src/core/memory/review.ts` (the §5 table as `ratingFor`, candidate ranking, slugs); the log `data/memory/reviews.jsonl` via `src/store/memory.ts`, removed with its chat; a clean `pick_items` result moves the phase from probe to plan; no extraction in review chats; one review chat per day via `POST /api/chats {kind:"review"}`; **Start review** on the Memory page and a due badge on the sidebar's Memory entry (`GET /api/memory`). Decisions taken with the defaults of §10: one schedule per item, partial is Again unless `loadBearing: false`, retention 0.85, six items, prober-only staleness, standard-mode sessions not counted. Not yet: plan-tree tinting in math-mode chats, the "open a teach session from this item" button (the reviewer offers it in prose), and §7's prober re-tests writing review events.

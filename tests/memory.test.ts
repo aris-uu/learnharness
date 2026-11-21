@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { EvidenceRecord } from "../src/core/math-evidence.ts";
-import { dueAt, intervalDays, rateFsrs, retrievability, retrievabilityAt } from "../src/core/memory/fsrs.ts";
+import { daysTo90, dueAt, FSRS_DEFAULT_WEIGHTS, intervalDays, rateFsrs, retrievability, retrievabilityAt } from "../src/core/memory/fsrs.ts";
 import { curvePoints, memoryItems, memorySnapshot, replay, seedFor, type MemoryEvent } from "../src/core/memory/items.ts";
 
 const DAY = 86_400_000;
@@ -17,40 +17,64 @@ const record = (over: Partial<EvidenceRecord>): EvidenceRecord => ({
 	hints: 0, note: "note", recordedAt: iso(T0), ...over,
 });
 
-describe("FSRS core", () => {
-	it("recall is 1 at review time, 0.9 after one stability, and falls monotonically", () => {
-		assert.equal(retrievability(0, 5), 1);
-		assert.ok(Math.abs(retrievability(5, 5) - 0.9) < 1e-9);
-		assert.ok(retrievability(10, 5) < retrievability(5, 5));
-	});
-
-	it("the interval for 0.9 retention equals the stability, and is longer for lower retention", () => {
-		assert.ok(Math.abs(intervalDays(7, 0.9) - 7) < 1e-6);
-		assert.ok(intervalDays(7, 0.85) > 7);
-		assert.ok(Math.abs(retrievability(intervalDays(7, 0.85), 7) - 0.85) < 1e-7);
-	});
-
-	it("first ratings order stabilities Again < Hard < Good < Easy", () => {
+describe("FSRS core (ts-fsrs FSRS-7)", () => {
+	it("first ratings start at the library's default stabilities", () => {
 		const s = ([1, 2, 3, 4] as const).map((r) => rateFsrs(null, r, T0).stability);
-		assert.deepEqual([...s].sort((a, b) => a - b), s);
-		assert.equal(rateFsrs(null, 3, T0).reps, 1);
+		assert.deepEqual(s, [0.1104, 2.2395, 3.9221, 11.7841]);
+		assert.deepEqual(s, FSRS_DEFAULT_WEIGHTS.slice(0, 4));
+		const first = rateFsrs(null, 3, T0);
+		assert.equal(first.reps, 1);
+		assert.equal(first.lastReview, T0);
+		assert.ok(first.stabilityFast > 0);
 	});
 
-	it("a successful review after the interval grows stability; a lapse shrinks it and counts", () => {
+	it("recall is about 1 at review time and falls monotonically", () => {
+		const state = rateFsrs(null, 3, T0);
+		assert.ok(retrievability(state, 0) > 0.9999);
+		assert.ok(retrievability(state, 2) < retrievability(state, 0));
+		assert.ok(retrievability(state, 10) < retrievability(state, 2));
+		assert.equal(retrievabilityAt(state, T0 + 2 * DAY), retrievability(state, 2));
+	});
+
+	it("intervalDays inverts the curve, and lower retention waits longer", () => {
+		const state = rateFsrs(null, 3, T0);
+		assert.ok(intervalDays(state, 0.85) > intervalDays(state, 0.9));
+		assert.ok(Math.abs(retrievability(state, intervalDays(state, 0.85)) - 0.85) < 1e-4);
+		assert.equal(daysTo90(state), intervalDays(state, 0.9));
+		assert.throws(() => intervalDays(state, 1), RangeError);
+	});
+
+	it("a successful review after the interval grows memory; a lapse shrinks it and counts", () => {
 		const first = rateFsrs(null, 3, T0);
-		const later = T0 + Math.round(first.stability) * DAY;
+		const later = T0 + Math.round(intervalDays(first, 0.85)) * DAY;
 		const good = rateFsrs(first, 3, later);
 		const again = rateFsrs(first, 1, later);
-		assert.ok(good.stability > first.stability);
+		assert.ok(daysTo90(good) > daysTo90(first));
 		assert.ok(again.stability < first.stability);
 		assert.equal(again.lapses, 1);
+		assert.equal(good.lapses, 0);
 		assert.equal(good.lastReview, later);
+		assert.equal(good.reps, 2);
+	});
+
+	it("a same-day Again is not a lapse", () => {
+		const first = rateFsrs(null, 3, T0);
+		assert.equal(rateFsrs(first, 1, T0 + 3_600_000).lapses, 0);
 	});
 
 	it("an Again is due no sooner than a day later", () => {
 		const state = rateFsrs(null, 1, T0);
+		assert.ok(intervalDays(state, 0.85) < 1);
 		assert.ok(dueAt(state, 0.85, 1) >= T0 + DAY);
-		assert.equal(retrievabilityAt(state, T0), 1);
+		assert.equal(dueAt(state, 0.85), T0 + intervalDays(state, 0.85) * DAY);
+	});
+
+	it("custom weights change the schedule", () => {
+		const weights = FSRS_DEFAULT_WEIGHTS.map((w, i) => (i === 2 ? w * 2 : w));
+		assert.equal(rateFsrs(null, 3, T0, weights).stability, FSRS_DEFAULT_WEIGHTS[2]! * 2);
+		const a = rateFsrs(null, 3, T0);
+		const b = rateFsrs(null, 3, T0, weights);
+		assert.ok(daysTo90(b, weights) > daysTo90(a));
 	});
 });
 
@@ -112,11 +136,12 @@ describe("memory items from the ledger", () => {
 		const records = [record({ id: "a" }), record({ id: "b", dimension: "U" })];
 		const review: MemoryEvent = { itemId: "c1#n", at: iso(T0 + 30 * DAY), kind: "review", rating: 3 };
 		const [withReview] = memorySnapshot(records, T0 + 30 * DAY, { reviews: [review] });
-		assert.equal(withReview!.retrievability, 1);
+		// FSRS-7's curve starts at 0.99999 by design (ts-fsrs migration guide).
+		assert.ok(withReview!.retrievability > 0.9999);
 		assert.equal(withReview!.state!.reps, 2);
 		const curve = curvePoints(withReview!, T0 + 40 * DAY, 4);
-		assert.equal(curve[0]![1], 1);
-		assert.ok(curve.some(([t, r]) => t === T0 + 30 * DAY && r === 1));
+		assert.ok(curve[0]![1] > 0.9999);
+		assert.ok(curve.some(([t, r]) => t === T0 + 30 * DAY && r > 0.9999));
 	});
 
 	it("sorts the snapshot most forgotten first", () => {

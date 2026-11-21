@@ -32,6 +32,7 @@ import type { QuestionAnswerData } from "./question-core.ts";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { validatePluginSubmissionImageArray, validatePluginSubmissionImages, type PluginSubmissionImages, type PluginSubmissionOccurrence } from "./plugin-submissions.ts";
 import type { LhMessage } from "./native-messages.ts";
+import { sessionClock } from "./session-clock.ts";
 import {
 	activeProblemOf,
 	activeProblemOccurrenceOf,
@@ -297,7 +298,7 @@ export function parseChatInput(input: unknown): ChatInput {
  * double-answering.
  */
 export function inputAppends(
-	record: { messages: LhMessage[]; kind?: string },
+	record: { messages: LhMessage[]; kind?: string; settings?: { timeboxMin?: number; timebox?: import("./session-clock.ts").TimeboxState } },
 	input: ChatInput,
 ): LhMessage[] {
 	assertPluginQuestionInputAllowed(record.messages, input);
@@ -314,7 +315,10 @@ export function inputAppends(
 			if (!pending || pending.toolCallId !== input.toolCallId) {
 				throw new ChatInputError("answer input targets no pending question call");
 			}
-			return [newAnswerResult(input.toolCallId, pending.tool, input.answer)];
+			// A time-boxed sitting tells the tutor the time with every answer.
+			const budget = record.settings?.timeboxMin;
+			return [newAnswerResult(input.toolCallId, pending.tool, input.answer,
+				budget ? { clock: sessionClock(record.messages, budget, Date.now(), record.settings?.timebox) } : undefined)];
 		}
 		case "continue":
 			return dismissalConclusion(record);

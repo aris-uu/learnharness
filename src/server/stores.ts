@@ -14,6 +14,7 @@ import { settingsStore } from "../store/settings.ts";
 import { themeStore } from "../store/themes.ts";
 import { evidenceStore } from "../store/evidence.ts";
 import { reviewStore } from "../store/memory.ts";
+import { fsrsWeightsStore } from "../store/fsrs-weights.ts";
 import { resolveSettings, type EffectiveSettings } from "../core/settings-resolution.ts";
 import { syncCustomProvider } from "./custom-provider.ts";
 import { configureWorkerRequestAdmission } from "../agent/worker-request-admission.ts";
@@ -27,6 +28,7 @@ export const stores = {
 	themeStore,
 	evidenceStore,
 	reviewStore,
+	fsrsWeightsStore,
 };
 
 export type Stores = typeof stores;

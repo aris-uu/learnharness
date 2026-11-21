@@ -78,7 +78,7 @@ import { capturePluginQuestionDismissal, confirmPluginQuestionDismissal, type Pl
 import { pendingPluginQuestionOf, pluginQuestionCallsOf } from "@/src/core";
 import { pluginQuestionOccurrenceKey, type PluginQuestionSnapshot } from "@/src/core";
 import type { PluginQuestionDraft } from "./session-core";
-import { GoBackMenu, SessionMathModeToggle, useSessionProfile } from "@/components/math-mode";
+import { ClosedSittingCard, GoBackMenu, SessionMathModeToggle, SessionTimeboxSelect, useSessionProfile, useSittingState } from "@/components/math-mode";
 import { goBackMessage } from "@/src/core";
 import { derivePlanStatuses, type PlanNode } from "@/src/core";
 import { SessionFind } from "@/components/session-find";
@@ -1285,6 +1285,7 @@ export function Chat({
 		[planTree, messages],
 	);
 	const [teachingProfile, setTeachingProfile] = useSessionProfile(chatId);
+	const sitting = useSittingState(chatId, nativeMessages.length);
 	const goBackTo = useCallback(async (node: PlanNode) => {
 		const p = pendingRef.current;
 		if (p) {
@@ -1742,6 +1743,7 @@ export function Chat({
 </Hint>
 					)}
 					{kind !== "practice" && !review && <SessionMathModeToggle chatId={chatId} profile={teachingProfile} onChange={setTeachingProfile} />}
+					{kind !== "practice" && <SessionTimeboxSelect chatId={chatId} messages={nativeMessages} />}
 					{teachingProfile === "math" && planTree && (
 						<GoBackMenu tree={planTree} current={planCurrent} messages={nativeMessages} disabled={busy} onPick={(node) => void goBackTo(node)} />
 					)}
@@ -2132,7 +2134,7 @@ export function Chat({
 							)
 						)
 					}
-					composer={
+					composer={sitting?.closedAt ? <ClosedSittingCard chatId={chatId} title={title} state={sitting} profile={teachingProfile} /> :
 						<ChatSessionComposer
 							// Stop aborts ANY in-flight turn (stream-reattach wave): the
 							// square renders while a reattached/wake turn runs too — the

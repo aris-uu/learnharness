@@ -4,6 +4,9 @@ interface SessionCreation {
 	title: string;
 	kind?: "practice" | "review";
 	profile?: "math";
+	timeboxMin?: number;
+	consolidate?: boolean;
+	continuesFrom?: string;
 	graphContext?: { propositions: readonly { id: string; name: string; statement: string }[] };
 }
 
