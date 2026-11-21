@@ -200,9 +200,54 @@ describe("reviewer tools", () => {
 		const up = await call("record_review", { ...grade, dimension: "U", outcome: "partial", question: "Drop Hausdorff", followUp: true }, "f1");
 		assert.equal(up.details.kind, "followup");
 		assert.match(up.details.instruction, /slipped/);
-		assert.equal(up.details.nextDue, dueAfterFirst, "a follow-up never moves the schedule");
+		assert.ok(Date.parse(up.details.nextDue) <= Date.parse(dueAfterFirst), "a failed follow-up can only bring the item back sooner");
 		assert.equal((await call("record_review", { ...grade, dimension: "P", followUp: true }, "f2")).isError, true, "no climbing after a slip");
 		assert.deepEqual(reviews.map((e) => e.kind), ["review", "followup"]);
+	});
+
+	it("a failed follow-up caps the first attempt one step; a clean one leaves it", async () => {
+		const grade = { nodeId: "compact", dimension: "K", outcome: "correct", hints: 0, question: "State it", note: "clean", confidence: 95, elapsedSeconds: 30, expectedSeconds: 60 };
+		const run = async (followUpOutcome: "correct" | "incorrect") => {
+			const { call, answer, reviews } = setup(T0 + 60 * DAY, true);
+			await call("pick_items", { itemIds: ["teach1#compact"] });
+			answer("compact", "x1");
+			const first = await call("record_review", grade, "g1");
+			assert.equal(first.details.rating, "Easy");
+			const up = await call("record_review", { ...grade, dimension: "P", outcome: followUpOutcome, question: "Prove it", followUp: true }, "f1");
+			return { first, up, reviews };
+		};
+		const clean = await run("correct");
+		assert.equal(clean.up.details.nextDue, clean.first.details.nextDue, "a clean follow-up leaves the schedule");
+		const slipped = await run("incorrect");
+		assert.ok(Date.parse(slipped.up.details.nextDue) < Date.parse(slipped.first.details.nextDue), "Easy capped to Good: due sooner");
+		assert.match(slipped.up.details.instruction, /lowers this item's first attempt/);
+		assert.equal(slipped.reviews[0]!.rating, 4, "the log keeps the graded rating");
+	});
+
+	it("check: repair and close are logged only, never the retry; consolidation asks for close checks", async () => {
+		const { call, answer, reviews } = setup(T0 + 60 * DAY, true);
+		await call("pick_items", { itemIds: ["teach1#hausdorff", "teach1#compact"] });
+		const base = { dimension: "K", hints: 0, question: "q", note: "n" };
+		assert.equal((await call("record_review", { ...base, nodeId: "hausdorff", outcome: "incorrect", check: "repair" }, "c0")).isError, true, "a check needs a first attempt");
+		answer("hausdorff", "x1");
+		const again = await call("record_review", { ...base, nodeId: "hausdorff", outcome: "incorrect" }, "g1");
+		const refused = await call("record_review", { ...base, nodeId: "hausdorff", outcome: "correct", dimension: "S", followUp: true }, "f1");
+		assert.equal(refused.isError, true);
+		assert.match(refused.content[0]!.text, /repair/);
+		answer("hausdorff", "x2");
+		const repair = await call("record_review", { ...base, nodeId: "hausdorff", outcome: "correct", dimension: "S", check: "repair" }, "c1");
+		assert.equal(repair.details.kind, "check");
+		assert.equal(repair.details.nextDue, again.details.nextDue, "a check never moves the schedule");
+		assert.deepEqual(repair.details.retries.waiting, ["hausdorff"], "a repair check is not the retry");
+		answer("compact", "x3");
+		const last = await call("record_review", { ...base, nodeId: "compact", outcome: "correct" }, "g2");
+		assert.match(last.details.instruction, /deferred retry on hausdorff/);
+		answer("hausdorff", "x4");
+		const retry = await call("record_review", { ...base, nodeId: "hausdorff", outcome: "correct", question: "q2" }, "r1");
+		assert.equal(retry.details.kind, "retry");
+		assert.match(retry.details.instruction, /blank-page retrieval per item[\s\S]*hausdorff, compact/);
+		assert.equal(reviews.find((e) => e.kind === "check")!.check, "repair");
+		assert.equal(typeof reviews[0]!.minutesIn, "number", "review events carry minutesIn");
 	});
 
 	it("record_review defers an Again's retry behind other items", async () => {

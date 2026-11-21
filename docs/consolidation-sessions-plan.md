@@ -111,3 +111,15 @@ It stays spaced repetition; only the activity changes.
 1. **Threshold: stability ≥ 21 days or interval ≥ 21 days?** Anki defines mature by interval. At 85 % retention the interval is about 1.9 × stability, so "interval ≥ 21" means stability ≥ about 11. Proposed: **stability ≥ 21**, as you said. It is the stricter rule, which fits a schedule that is currently overconfident.
 2. **Unverified items** (21 now, assumed-only): consolidate them, or verify them with one quick question in review? Proposed: consolidation, since an assumption has never been tested.
 3. **Can a mature item still be pulled into a consolidation cluster** as a prerequisite? Proposed: yes, as a warm-up whose attempt is logged as `followup`, so it doesn't move its schedule.
+
+## 9. Changes after the first sittings (2026-11-21)
+
+From `D:/projects/learning/reports/timebox-consolidation-fsrs7-2026-11-21.md`. The first four 25-minute sittings used 6–15 minutes each, two repair answers went unrecorded, and one item matured on the easiest rung right after its proof follow-up failed.
+
+- **Item count:** `floor(budget / 6)` (25 min → 4), not `floor(teachMin / 12)`. When the picks are done with more than about 8 minutes left before converge, the tutor picks more.
+- **1-day floor after every rating**, not only after Again (`dueAt` in `core/memory/fsrs.ts`). Under FSRS-7's defaults a Hard could fall due within the hour.
+- **A failed follow-up caps the first attempt** one step on replay (`capByFollowUps` in `core/memory/items.ts`; the log keeps the graded rating, the event carries `cappedFrom`).
+- **`record_review` `check: "repair" | "close"`** (event kind `check`): the rebuild after a repair, and the blank-page close retrieval per item. Logged only; never the retry, never moves the schedule, not training data.
+- **The close:** `close_session` in a consolidation sitting refuses until every attempted item has a close check, unless `closeChecksSkipped` gives the reason. The items themselves stand in for goals.
+- **`minutesIn`** is written on evidence records and review events (`minutesIntoSitting` in `core/session-clock.ts`).
+

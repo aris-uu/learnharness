@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { minutesIntoSitting } from "../src/core/session-clock.ts";
 import { activeMinutes, budgetNodeLimit, daysTo90, intervalDays, memoryStage, MATURE_STABILITY_DAYS, rateFsrs, resumedAfterHours, sessionClock, timeboxDoctrine } from "../src/core/index.ts";
 
 const MIN = 60_000;
@@ -50,5 +51,20 @@ test("the plan limit scales with the budget", () => {
 	assert.equal(budgetNodeLimit(60, true), 3);
 	assert.equal(budgetNodeLimit(25, true), 1);
 	assert.equal(budgetNodeLimit(60, false), 6);
-	assert.match(timeboxDoctrine(45, "consolidate"), /about 3 items/);
+	assert.match(timeboxDoctrine(45, "consolidate"), /about 7 items/);
+});
+
+test("minutesIntoSitting: the clock for a time-boxed chat, else time since the last long gap", () => {
+	const m = (min: number) => ({ timestamp: Date.parse("2026-11-21T03:00:00Z") + min * 60_000 });
+	const msgs = [m(0), m(10), m(20), m(100), m(105)];
+	const now = m(110).timestamp;
+	assert.equal(minutesIntoSitting(msgs, now), 10, "the sitting restarted after the 80-minute gap");
+	assert.equal(minutesIntoSitting(msgs, now, { timeboxMin: 25 }), 30, "time-boxed: all active minutes");
+	assert.equal(minutesIntoSitting([], now), 0);
+});
+
+test("consolidation doctrine fills a 25-minute sitting with about 4 items and says to top up", () => {
+	const text = timeboxDoctrine(25, "consolidate");
+	assert.match(text, /Pick about 4 items/);
+	assert.match(text, /call pick_items again/);
 });

@@ -19,8 +19,13 @@ export const RATING_LABELS: Record<FsrsRating, string> = { 1: "Again", 2: "Hard"
  *  the same session) is logged for the record but never replayed. */
 export interface ReviewEvent extends MemoryEvent {
 	/** review: the first attempt, moves the schedule. retry: after an Again.
-	 *  followup: a harder rung after a clean answer (the easy-to-hard ladder). */
-	kind: "review" | "retry" | "followup";
+	 *  followup: a harder rung after a clean answer (the easy-to-hard ladder);
+	 *  a failed one caps the first attempt (items.ts capByFollowUps).
+	 *  check: logged only, never the retry: see `check`. */
+	kind: "review" | "retry" | "followup" | "check";
+	/** For kind check: "repair" = the learner's rebuild right after a repair;
+	 *  "close" = the sitting's blank-page retrieval on this item. */
+	check?: ReviewCheck;
 	/** The record_review tool-call id. */
 	id: string;
 	/** The review session it happened in. */
@@ -36,6 +41,8 @@ export interface ReviewEvent extends MemoryEvent {
 	question: string;
 	note: string;
 	habits?: MathHabit[];
+	/** Active minutes into the sitting (session-clock.ts minutesIntoSitting). */
+	minutesIn?: number;
 	/** Recall probability the schedule predicted just before this attempt. */
 	predicted?: number;
 	/** The learner said the item was never consolidated: no retry, it needs teaching. */
@@ -49,6 +56,9 @@ export interface ReviewStore {
 	/** Drop the events made in `chatId`, and those on items it seeded. */
 	removeChat(chatId: string): number;
 }
+
+export const REVIEW_CHECKS = ["repair", "close"] as const;
+export type ReviewCheck = (typeof REVIEW_CHECKS)[number];
 
 export interface RatingInput {
 	outcome: ReviewOutcome;
@@ -80,13 +90,14 @@ export function isReviewEvent(value: unknown): value is ReviewEvent {
 	return !!r && typeof r === "object" &&
 		typeof r.id === "string" && typeof r.itemId === "string" && typeof r.chatId === "string" &&
 		typeof r.at === "string" && Number.isFinite(Date.parse(r.at)) &&
-		(r.kind === "review" || r.kind === "retry" || r.kind === "followup") &&
+		(r.kind === "review" || r.kind === "retry" || r.kind === "followup" || r.kind === "check") &&
+		(r.check === undefined || (REVIEW_CHECKS as readonly unknown[]).includes(r.check)) &&
 		[1, 2, 3, 4].includes(r.rating as number) &&
 		(MATH_DIMENSIONS as readonly unknown[]).includes(r.dimension) &&
 		(REVIEW_OUTCOMES as readonly unknown[]).includes(r.outcome) &&
 		typeof r.hints === "number" && typeof r.question === "string" && typeof r.note === "string" &&
 		(r.loadBearing === undefined || typeof r.loadBearing === "boolean") && (r.noRetry === undefined || typeof r.noRetry === "boolean") &&
-		optionalNumber(r.confidence) && optionalNumber(r.elapsedSeconds) && optionalNumber(r.expectedSeconds) && optionalNumber(r.predicted) &&
+		optionalNumber(r.confidence) && optionalNumber(r.elapsedSeconds) && optionalNumber(r.expectedSeconds) && optionalNumber(r.predicted) && optionalNumber(r.minutesIn) &&
 		(r.habits === undefined || (Array.isArray(r.habits) && r.habits.every((tag) => (MATH_HABITS as readonly unknown[]).includes(tag))));
 }
 

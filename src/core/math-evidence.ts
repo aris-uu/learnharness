@@ -239,6 +239,8 @@ export interface EvidenceRecord extends MathEvidence {
 	nodeSummary?: string;
 	/** ISO time the evidence was recorded. */
 	recordedAt: string;
+	/** Active minutes into the sitting when it was recorded (session-clock.ts minutesIntoSitting). Absent on records before 2026-11-21. */
+	minutesIn?: number;
 }
 
 /** The global ledger port (src/store/evidence.ts is the fs adapter). */

@@ -3,7 +3,7 @@
  * ts-fsrs 6.0.0's FSRS7Algorithm (MIT, Open Spaced Repetition), with no
  * formulas of its own (docs/fsrs7-plan.md). The wrapper adds what the
  * library's model leaves to the caller: the review timestamp, rep and lapse
- * counts, and the 1-day floor after an Again.
+ * counts, and the 1-day floor after a rated event.
  *
  * Time is continuous (fractional days). FSRS-7's fast trace carries
  * same-day reviews itself, so there is no same-day branch. Learning steps,
@@ -97,9 +97,12 @@ export function rateFsrs(state: FsrsState | null, rating: FsrsRating, atMs: numb
 	};
 }
 
-/** When `state` is due at `retention`. After an Again the next review waits
- *  at least `minAfterAgainDays` (a relearning session needs a night). */
-export function dueAt(state: FsrsState, retention: number, lastRating?: FsrsRating, minAfterAgainDays = 1, weights?: FsrsWeights): number {
+/** When `state` is due at `retention`. After any rated event (`lastRating`
+ *  given) the next review waits at least `minDays`: a sitting is never
+ *  repeated the same day (owner, 2026-11-21: under FSRS-7's defaults a Hard
+ *  could fall due within the hour). Mature intervals are far above the floor,
+ *  so in practice it binds only on items still in learning. */
+export function dueAt(state: FsrsState, retention: number, lastRating?: FsrsRating, minDays = 1, weights?: FsrsWeights): number {
 	const days = intervalDays(state, retention, weights);
-	return state.lastReview + Math.max(days, lastRating === 1 ? minAfterAgainDays : 0) * DAY_MS;
+	return state.lastReview + Math.max(days, lastRating !== undefined ? minDays : 0) * DAY_MS;
 }

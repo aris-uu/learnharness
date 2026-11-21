@@ -10,6 +10,7 @@ import { serverExecute } from "../tool-execute.ts";
 import type { ChatStore } from "../../core/ports.ts";
 import { evidenceFromMessages } from "../../core/math-evidence.ts";
 import type { SessionGoal } from "../../core/session-clock.ts";
+import type { ReviewStore } from "../../core/memory/review.ts";
 
 export const SET_GOALS_TOOL = "set_goals";
 export const CLOSE_SESSION_TOOL = "close_session";
@@ -29,11 +30,12 @@ const closeInput = Type.Object({
 		status: Type.Union([Type.Literal("met"), Type.Literal("partial"), Type.Literal("unmet")]),
 	}), { description: "One per goal set with set_goals; empty when the sitting has no goals (review and consolidation)." }),
 	handoff: Type.String({ minLength: 20, description: "Markdown: what holds, what is fragile (name habits), what the next sitting should start with, and the deferred \"later\" items." }),
+	closeChecksSkipped: Type.Optional(Type.String({ minLength: 3, description: "Consolidation only: why some items got no blank-page close check (the learner stopped, or time ran out). Name the items." })),
 });
 
 const CREDITED = new Set(["correct", "correct_slow"]);
 
-export function timeboxTools(ctx: { chatId: string; chatStore: ChatStore }): Record<string, AgentTool<any>> {
+export function timeboxTools(ctx: { chatId: string; chatStore: ChatStore; reviewStore?: ReviewStore }): Record<string, AgentTool<any>> {
 	const record = () => ctx.chatStore.getChat(ctx.chatId);
 	return {
 		[SET_GOALS_TOOL]: {
@@ -58,9 +60,9 @@ export function timeboxTools(ctx: { chatId: string; chatStore: ChatStore }): Rec
 		[CLOSE_SESSION_TOOL]: {
 			name: CLOSE_SESSION_TOOL,
 			label: CLOSE_SESSION_TOOL,
-			description: "End this time-boxed sitting after the close ritual (one blank-page retrieval per goal). Give a verdict per goal and the hand-off. \"met\" needs credited evidence on one of the goal's nodes in this session. Afterwards the session is read-only and the learner continues in a new one seeded with the hand-off.",
+			description: "End this time-boxed sitting after the close ritual (one blank-page retrieval per goal). Give a verdict per goal and the hand-off. \"met\" needs credited evidence on EVERY node of the goal in this session; a goal with an untaught or uncredited node is partial. A consolidation sitting needs a close check (record_review with check: \"close\") on every item it attempted, unless closeChecksSkipped says why not. Afterwards the session is read-only and the learner continues in a new one seeded with the hand-off.",
 			parameters: closeInput,
-			execute: serverExecute(CLOSE_SESSION_TOOL, closeInput, async ({ verdicts, handoff }) => {
+			execute: serverExecute(CLOSE_SESSION_TOOL, closeInput, async ({ verdicts, handoff, closeChecksSkipped }) => {
 				const chat = record();
 				if (!chat) return { ok: false, error: `Chat not found: ${ctx.chatId}` };
 				const state = chat.settings?.timebox ?? {};
@@ -72,9 +74,17 @@ export function timeboxTools(ctx: { chatId: string; chatStore: ChatStore }): Rec
 				const evidence = evidenceFromMessages(chat.messages);
 				// Standard-mode sessions record no evidence: the check applies in math mode only.
 				if (evidence.length > 0) {
-					const unbacked = goals.filter((g) => byId.get(g.id) === "met" &&
-						!evidence.some((e) => g.nodeIds.includes(e.nodeId) && CREDITED.has(e.outcome) && e.hints <= 1));
-					if (unbacked.length) return { ok: false, error: `"met" without credited evidence on its nodes: ${unbacked.map((g) => g.id).join(", ")}. Record the close's retrieval with record_evidence first, or mark it partial.` };
+					// MET MEANS EVERY NODE (owner, 2026-11-21): one credited node let a
+					// goal with an untaught node and a partial blank-page answer pass.
+					const uncredited = (g: SessionGoal) => g.nodeIds.filter((id) => !evidence.some((e) => e.nodeId === id && CREDITED.has(e.outcome) && e.hints <= 1));
+					const unbacked = goals.filter((g) => byId.get(g.id) === "met" && (g.nodeIds.length === 0 || uncredited(g).length > 0));
+					if (unbacked.length) return { ok: false, error: `"met" needs credited evidence on every node of the goal. Missing: ${unbacked.map((g) => `${g.id} (${uncredited(g).join(", ") || "no nodes"})`).join("; ")}. Mark it partial, or record the evidence first.` };
+				}
+				if (chat.kind === "review" && chat.settings?.consolidate && ctx.reviewStore && !closeChecksSkipped) {
+					const here = ctx.reviewStore.list().filter((e) => e.chatId === ctx.chatId);
+					const closed = new Set(here.filter((e) => e.kind === "check" && e.check === "close").map((e) => e.itemId));
+					const owed = [...new Set(here.filter((e) => e.kind === "review").map((e) => e.itemId))].filter((id) => !closed.has(id));
+					if (owed.length) return { ok: false, error: `No blank-page close check yet on: ${owed.map((id) => id.slice(id.indexOf("#") + 1)).join(", ")}. Ask one per item and grade it with record_review check: "close", or pass closeChecksSkipped with the reason.` };
 				}
 				const closedGoals = goals.map((g) => ({ ...g, status: byId.get(g.id) ?? g.status }));
 				const closedAt = new Date().toISOString();
