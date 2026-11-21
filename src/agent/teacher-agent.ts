@@ -6,6 +6,8 @@ import type { Usage } from "@earendil-works/pi-ai";
 import { PATHS } from "../../config.ts";
 import { APP_IDENTITY, piEngineFor, type PiEngine } from "./models.ts";
 import { effectivePromptSegments, profileFragments } from "./prompt-segments.ts";
+import { timeboxDoctrine } from "../core/session-clock.ts";
+import { CONSOLIDATION_DOCTRINE } from "./consolidation.ts";
 import type { TeachingProfile } from "../core/contracts/chat.ts";
 import {
 	askUserQuestionTool,
@@ -167,6 +169,12 @@ export interface AgentBuildOptions {
 	promptSwitches?: Record<string, boolean>;
 	/** The session's teaching profile: extra doctrine and tool rules, per turn. */
 	profile?: TeachingProfile;
+	/** Time-boxed session budget (minutes): appends the time-box doctrine. */
+	timeboxMin?: number;
+	/** Hours since the last message when a time-boxed sitting was reopened late. */
+	resumedHours?: number | null;
+	/** Review sessions: a consolidation sitting (items in learning, re-teaching). */
+	consolidate?: boolean;
 	/** Native conversation identity: the existing persisted chat id, reused
 	 * across reconstructed prober, teacher, and practice Agents.
 	 * Debug: when set AND LH_PROVIDER_EVENTS=1, raw provider stream events
@@ -233,7 +241,13 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 	const composedPrompt = opts.promptSwitches || opts.profile
 		? composeInstructions(kind, opts.promptSwitches, opts.profile)
 		: composedInstructions[kind]!;
-	const builtinPrompt = narrationGuard ? `${composedPrompt}\n\n---\n\n${SEND_TO_USER_DELIVERY_RULE}` : composedPrompt;
+	const sessionPrompt = [composedPrompt,
+		...(kind === "reviewer" && opts.consolidate ? [CONSOLIDATION_DOCTRINE] : []),
+		...(opts.timeboxMin && kind !== "practice"
+			? [timeboxDoctrine(opts.timeboxMin, kind === "reviewer" ? (opts.consolidate ? "consolidate" : "review") : "teach", opts.resumedHours ?? null)]
+			: []),
+	].join("\n\n---\n\n");
+	const builtinPrompt = narrationGuard ? `${sessionPrompt}\n\n---\n\n${SEND_TO_USER_DELIVERY_RULE}` : sessionPrompt;
 	// Bind native read and preserve the kind/model-aware Claude output gate
 	// before resolving additive plugins. Explicit registries remain caller-owned.
 	const builtinTools = [

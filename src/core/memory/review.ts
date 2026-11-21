@@ -7,7 +7,7 @@
 import { MATH_DIMENSIONS, MATH_HABITS, type EvidenceRecord, type MathDimension, type MathHabit, type MathOutcome } from "../math-evidence.ts";
 import type { PlanEdge } from "../contracts/plan.ts";
 import type { FsrsRating } from "./fsrs.ts";
-import type { MemoryEvent, MemoryItemSnapshot } from "./items.ts";
+import { memoryStage, type MemoryEvent, type MemoryItemSnapshot, type MemoryStage } from "./items.ts";
 
 export const REVIEW_OUTCOMES = ["correct", "correct_slow", "partial", "incorrect"] as const satisfies readonly MathOutcome[];
 export type ReviewOutcome = (typeof REVIEW_OUTCOMES)[number];
@@ -92,8 +92,8 @@ export function isReviewEvent(value: unknown): value is ReviewEvent {
 
 /** A review session's title: dated, numbered from the second one that day
  *  (owner, 2026-11-18: several review sessions a day). */
-export function reviewTitle(nowMs: number, existingTitles: readonly string[] = []): string {
-	const base = `Review ${new Date(nowMs).toISOString().slice(0, 10)}`;
+export function reviewTitle(nowMs: number, existingTitles: readonly string[] = [], prefix = "Review"): string {
+	const base = `${prefix} ${new Date(nowMs).toISOString().slice(0, 10)}`;
 	const taken = new Set(existingTitles);
 	if (!taken.has(base)) return base;
 	let n = 2;
@@ -110,6 +110,7 @@ export interface ReviewCandidate {
 	/** Recall probability now (null: only ever assumed, never shown). */
 	recall: number | null;
 	daysOverdue: number;
+	/** Days from the last review until recall falls to 90% (null: no schedule). */
 	stability: number | null;
 	credited: MathDimension[];
 	/** The last few attempts on this item, newest first, so no question repeats. */
@@ -144,8 +145,10 @@ export function reviewCandidates(input: {
 	sessionTitle: (chatId: string) => string;
 	nowMs: number;
 	limit?: number;
+	/** Only items at this stage: review takes mature items, consolidation the rest. */
+	stage?: MemoryStage;
 }): ReviewCandidate[] {
-	const due = input.snapshot.filter((item) => item.due);
+	const due = input.snapshot.filter((item) => item.due && (!input.stage || memoryStage(item) === input.stage));
 	const dueIds = new Set(due.map((item) => item.id));
 	const candidates = due.map((item): ReviewCandidate & { prereqOfDue: boolean; unverified: boolean } => {
 		const edges = input.edgesOf(item.chatId);
@@ -165,7 +168,7 @@ export function reviewCandidates(input: {
 			session: input.sessionTitle(item.chatId),
 			recall: item.state ? Math.round(item.retrievability * 100) / 100 : null,
 			daysOverdue: Math.max(0, Math.round(((input.nowMs - Date.parse(item.dueAt)) / DAY_MS) * 10) / 10),
-			stability: item.state ? Math.round(item.state.stability * 10) / 10 : null,
+			stability: item.daysTo90 === null ? null : Math.round(item.daysTo90 * 10) / 10,
 			credited: item.credited,
 			history,
 			habits,

@@ -71,6 +71,13 @@ export interface ChatSettings {
 	thinkingLevel?: ThinkingLevel;
 	/** The session's teaching profile; absent is the standard method. */
 	profile?: TeachingProfile;
+	/** Time-boxed session: the sitting's budget in active minutes (session-clock.ts). */
+	timeboxMin?: number;
+	/** The sitting's goals, breaks, extension and close (session-clock.ts). */
+	timebox?: import("../session-clock.ts").TimeboxState;
+	/** Review sessions only: a consolidation sitting over items still in learning
+	 *  (stability under MATURE_STABILITY_DAYS) instead of a review of mature ones. */
+	consolidate?: boolean;
 }
 
 export const TEACHING_PROFILES = ["math"] as const;

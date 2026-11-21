@@ -115,4 +115,5 @@ export * from "./math-evidence.ts";
 export * from "./memory/fsrs.ts";
 export * from "./memory/items.ts";
 export * from "./memory/review.ts";
+export * from "./session-clock.ts";
 export * from "./mcp.ts";

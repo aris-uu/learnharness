@@ -83,6 +83,10 @@ const nextConfig: NextConfig = {
 			// npm installs only the current platform's binary, so this glob
 			// resolves to exactly one Skia binary per build.
 			"node_modules/@napi-rs/canvas-*/**/*",
+			// FSRS-7 fitting (docs/fsrs7-plan.md): the optimizer binding loads its
+			// platform binary (@open-spaced-repetition/binding-<platform>) the same
+			// way — a dynamic optional-dep require the tracer cannot see.
+			"node_modules/@open-spaced-repetition/binding-*/**/*",
 			// Pi-compatible image resizing runs in an unbundled worker. Photon
 			// loads its colocated WASM through Node, also in packaged Electron.
 			// Side questions (2026-11-02): the side model's base prompt is read
@@ -121,6 +125,7 @@ const nextConfig: NextConfig = {
 		"@napi-rs/canvas", // native binding — bundling breaks the .node require
 		"@silvia-odwyer/photon-node", // CJS loads its adjacent WASM from disk
 		"@resvg/resvg-js", // native binding — same
+		"@open-spaced-repetition/binding", // native FSRS optimizer — same
 	],
 };
 

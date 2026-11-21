@@ -5,6 +5,8 @@ import type { PlanToolResult, PlanTree } from "../../core/contracts.ts";
 import type { ChatStore } from "../../core/ports.ts";
 import { createTree, PlanTreeError } from "../../core/plan-tree.ts";
 import { parseMermaidPlan } from "./mermaid-plan.ts";
+import { evidenceFromMessages, nodeStatus } from "../../core/math-evidence.ts";
+import { budgetNodeLimit } from "../../core/session-clock.ts";
 
 /** The binding-id reminder riding plan_init's slim content (owner,
  *  2026-10-09): plan_init is the exact moment the node ids become
@@ -90,6 +92,22 @@ export function mathPlanWarnings(nodeCount: number, earlierMaps: number): string
 	return warnings;
 }
 
+/** A time-boxed sitting's scope guard: only NEW nodes count (not ones already solid or assumed here). */
+export function budgetPlanWarnings(nodeIds: readonly string[], messages: readonly unknown[], budgetMin: number, math: boolean, earlierMaps: number): string[] {
+	const evidence = evidenceFromMessages(messages);
+	const fresh = nodeIds.filter((id) => { const s = nodeStatus(id, evidence); return s !== "solid" && s !== "conditional"; });
+	const limit = budgetNodeLimit(budgetMin, math);
+	const warnings: string[] = [];
+	if (fresh.length > limit) {
+		warnings.push(`This map has ${fresh.length} new nodes, but a ${budgetMin}-minute sitting fits about ${limit}. ` +
+			"Keep the path to this sitting's goals, put the rest on the hand-off's \"later\" list, and tell the learner what was deferred.");
+	}
+	if (earlierMaps >= MATH_PLAN_REWRITE_SOFT_LIMIT) {
+		warnings.push(`This is map number ${earlierMaps + 1} for this sitting. Prefer inserting the one missing prerequisite, and ask the learner before widening the goal.`);
+	}
+	return warnings;
+}
+
 export function planTools(ctx: PlanToolContext, options: { mathMode?: boolean } = {}): Record<string, AgentTool<any>> {
 	return {
 		plan_init: {
@@ -118,7 +136,10 @@ export function planTools(ctx: PlanToolContext, options: { mathMode?: boolean } 
 					// createTree validates the structure (duplicate ids, missing
 					// edge endpoints, self-loops, cycles → PlanTreeError).
 					const next = createTree(parsed.plan.nodes, parsed.plan.edges);
-					const warnings = options.mathMode ? mathPlanWarnings(next.nodes.length, successfulPlanInits(record.messages)) : [];
+					const budget = record.settings?.timeboxMin;
+					const warnings = budget
+						? budgetPlanWarnings(next.nodes.map((n) => n.id), record.messages, budget + (record.settings?.timebox?.extendedMin ?? 0), options.mathMode === true, successfulPlanInits(record.messages))
+						: options.mathMode ? mathPlanWarnings(next.nodes.length, successfulPlanInits(record.messages)) : [];
 					chatStore.saveTree(chatId, next);
 					// Context diet: content = the validated nodeIds + the reminder (the
 				// ids just became binding for every quiz/explain call); details =

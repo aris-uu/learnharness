@@ -14,6 +14,7 @@ import { phaseAt3Lh } from "../src/core/phases.ts";
 import type { LhMessage } from "../src/core/native-messages.ts";
 import type { PlanTree } from "../src/core/contracts/plan.ts";
 import { createReviewStore } from "../src/store/memory.ts";
+import type { FsrsWeightsStore, TrainingReview } from "../src/core/memory/fsrs.ts";
 import { createReviewerTools } from "../src/agent/tools.ts";
 import { composeInstructions } from "../src/agent/teacher-agent.ts";
 
@@ -101,7 +102,7 @@ describe("review log store", () => {
 });
 
 describe("reviewer tools", () => {
-	function setup(now: number) {
+	function setup(now: number, consolidate = false, weightsStore?: FsrsWeightsStore) {
 		const evidence: EvidenceRecord[] = [
 			record({ id: "a" }), record({ id: "b", dimension: "U" }),
 			record({ id: "c", nodeId: "hausdorff", nodeTitle: "Hausdorff" }), record({ id: "d", nodeId: "hausdorff", nodeTitle: "Hausdorff", dimension: "S" }),
@@ -111,13 +112,13 @@ describe("reviewer tools", () => {
 		const reviews: ReviewEvent[] = [];
 		const reviewStore: ReviewStore = { list: () => [...reviews], append: (e) => { reviews.push(e); }, removeChat: () => 0 };
 		const teachTree: PlanTree = { nodes: [{ id: "hausdorff", title: "Hausdorff" }, { id: "compact", title: "Compact subsets" }, { id: "fresh", title: "Fresh" }], edges: [{ from: "hausdorff", to: "compact" }], version: 1 } as PlanTree;
-		const review = { messages: [] as unknown[], tree: undefined as PlanTree | undefined };
+		const review = { messages: [] as unknown[], tree: undefined as PlanTree | undefined, settings: consolidate ? { consolidate: true } : {} };
 		const chatStore = {
 			getChat: (id: string) => (id === "teach1" ? { messages: [], tree: teachTree } : id === "rev1" ? review : undefined),
 			listChats: () => [{ id: "teach1", title: "Topology" }],
 			saveTree: (_id: string, tree: PlanTree) => { review.tree = tree; },
 		};
-		const tools = createReviewerTools({ chatId: "rev1", chatStore: chatStore as never, evidenceStore, reviewStore, now: () => now });
+		const tools = createReviewerTools({ chatId: "rev1", chatStore: chatStore as never, evidenceStore, reviewStore, now: () => now, ...(weightsStore ? { weightsStore } : {}) });
 		const call = async (name: string, input: unknown, id = "t") => {
 			const result = await tools[name]!.execute(id, input as never) as { isError?: boolean; details?: any; content: Array<{ text: string }> };
 			return result;
@@ -131,13 +132,36 @@ describe("reviewer tools", () => {
 		return { tools, call, answer, reviews, review };
 	}
 
+	it("record_review refits FSRS from seed + review histories and reads the fitted weights", async () => {
+		const refits: TrainingReview[][][] = [];
+		let reads = 0;
+		const weightsStore: FsrsWeightsStore = { read: () => { reads++; return undefined; }, refit: async (items) => { refits.push(items.map((i) => [...i])); } };
+		const { call, answer } = setup(T0 + 60 * DAY, false, weightsStore);
+		await call("pick_items", { itemIds: ["teach1#compact"] });
+		answer("compact", "x1");
+		const graded = await call("record_review", { nodeId: "compact", dimension: "K", outcome: "correct", hints: 0, question: "State it", note: "clean" }, "g1");
+		assert.equal(graded.isError, undefined);
+		assert.ok(reads > 0, "schedules read the fitted weights");
+		assert.equal(refits.length, 1, "one refit per graded review");
+		// teach1#compact: its seed (Hard: credit only inside the encoding window),
+		// then this Good 60 days on — one training item.
+		const compact = refits[0]!.filter((item) => item.at(-1)!.deltaT === 60);
+		assert.deepEqual(compact, [[{ rating: 2, deltaT: 0 }, { rating: 3, deltaT: 60 }]]);
+	});
+
 	it("offers exactly the review toolset", () => {
 		const { tools } = setup(T0 + 60 * DAY);
 		assert.deepEqual(Object.keys(tools).sort(), ["ask_user_question", "due_items", "explain", "pick_items", "record_review", "search_evidence"]);
 	});
 
-	it("due_items ranks a due prerequisite first and leaves fresh items out", async () => {
+	it("a plain review lists mature items only; young ones belong to consolidation", async () => {
 		const { call } = setup(T0 + 60 * DAY);
+		const { details } = await call("due_items", {});
+		assert.deepEqual(details.candidates, []);
+	});
+
+	it("due_items ranks a due prerequisite first and leaves fresh items out", async () => {
+		const { call } = setup(T0 + 60 * DAY, true);
 		const { details } = await call("due_items", {});
 		assert.deepEqual(details.candidates.map((c: { itemId: string }) => c.itemId), ["teach1#hausdorff", "teach1#compact"]);
 		assert.equal(details.candidates[0].session, "Topology");
@@ -158,7 +182,7 @@ describe("reviewer tools", () => {
 	});
 
 	it("due_items marks faded items stale, so they start on the easiest rung", async () => {
-		const { call } = setup(T0 + 60 * DAY);
+		const { call } = setup(T0 + 60 * DAY, true);
 		const { details } = await call("due_items", {});
 		assert.equal(details.candidates[0].stale, true);
 	});

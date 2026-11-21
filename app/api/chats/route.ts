@@ -1,4 +1,4 @@
-import { chainsForSelection, formatChainLine } from "@/src/core";
+import { chainsForSelection, formatChainLine, isTimeboxOption } from "@/src/core";
 import { newGraphContextMessage, type GraphContextPick } from "@/src/core";
 import { compactionInFlight, createChat, isTurnRunning, listChats, nextReviewTitle, readSettingsRecord, stores, titleFromPrompt } from "@/src/server";
 import type { ChatListItem } from "@/src/core";
@@ -20,14 +20,16 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-	const body = (await req.json().catch(() => ({}))) as { title?: unknown; kind?: unknown; graphContext?: unknown; profile?: unknown };
+	const body = (await req.json().catch(() => ({}))) as { title?: unknown; kind?: unknown; graphContext?: unknown; profile?: unknown; timeboxMin?: unknown; consolidate?: unknown; continuesFrom?: unknown };
 	const title = typeof body.title === "string" ? body.title : "";
 	// Practice sessions (owner, 2026-10-04): kind "practice" marks the
 	// record — the practice agent + its tools from turn 1, no extraction.
 	// Review sessions (retention mode, 2026-11-18): titled by date, as many
 	// a day as the learner starts; the opening prompt is what they typed.
 	const kind = body.kind === "practice" ? ("practice" as const) : body.kind === "review" ? ("review" as const) : undefined;
-	const chat = createChat(kind === "review" ? nextReviewTitle() : titleFromPrompt(title || "Untitled session"), kind);
+	const consolidate = kind === "review" && body.consolidate === true;
+	const reviewName = nextReviewTitle(Date.now(), consolidate ? "Consolidate" : "Review");
+	const chat = createChat(kind === "review" ? reviewName : titleFromPrompt(title || "Untitled session"), kind);
 	// PER-SESSION MODELS (owner, 2026-09-28): a session owns its model +
 	// thinking level from birth — stamped verbatim from the STRONG slot,
 	// the new-session default. From here the strong slot never reaches
@@ -44,6 +46,17 @@ export async function POST(req: Request) {
 	}
 	if (kind === undefined && body.profile === "math") {
 		stores.chatStore.saveSettings(chat.id, { ...stores.chatStore.getChat(chat.id)?.settings, profile: "math" });
+	}
+	// Time-boxed sittings and consolidation (2026-11-20): stamped at birth.
+	if (kind !== "practice" && isTimeboxOption(body.timeboxMin)) {
+		stores.chatStore.saveSettings(chat.id, { ...stores.chatStore.getChat(chat.id)?.settings, timeboxMin: body.timeboxMin });
+	}
+	if (typeof body.continuesFrom === "string" && stores.chatStore.getChat(body.continuesFrom)) {
+		const current = stores.chatStore.getChat(chat.id)?.settings;
+		stores.chatStore.saveSettings(chat.id, { ...current, timebox: { ...current?.timebox, continuesFrom: body.continuesFrom } });
+	}
+	if (consolidate) {
+		stores.chatStore.saveSettings(chat.id, { ...stores.chatStore.getChat(chat.id)?.settings, consolidate: true });
 	}
 	// The session's map context (owner, 2026-10-04): the picked
 	// propositions ride the CREATION — message[0] is a graph-context

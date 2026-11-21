@@ -29,16 +29,24 @@ export function StartReviewButton({ due, className }: { due: number; className?:
 
 /** The sidebar's due count, refreshed on mount and every few minutes. */
 export function useMemoryDue(): number | null {
+	return useMemoryDueSplit().due;
+}
+
+/** The due count split by stage: mature items go to review, the rest to consolidation. */
+export function useMemoryDueSplit(): { due: number | null; split: { mature: number; learning: number } | null } {
 	const [due, setDue] = useState<number | null>(null);
+	const [split, setSplit] = useState<{ mature: number; learning: number } | null>(null);
 	useEffect(() => {
 		let live = true;
 		const load = () => fetch("/api/memory")
 			.then((res) => (res.ok ? res.json() : null))
-			.then((body: { due?: unknown } | null) => { if (live && typeof body?.due === "number") setDue(body.due); })
+			.then((body: { due?: unknown; mature?: unknown; learning?: unknown } | null) => {
+				if (live && typeof body?.due === "number") { setDue(body.due); if (typeof body.mature === "number" && typeof body.learning === "number") setSplit({ mature: body.mature, learning: body.learning }); }
+			})
 			.catch(() => {});
 		load();
 		const timer = setInterval(load, 5 * 60_000);
 		return () => { live = false; clearInterval(timer); };
 	}, []);
-	return due;
+	return { due, split };
 }

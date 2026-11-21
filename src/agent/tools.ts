@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import { timeboxTools } from "./tools/timebox.ts";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { invalidInputResult, questionResult, serverExecute } from "./tool-execute.ts";
 import {
@@ -20,6 +21,7 @@ import { planTools, type PlanToolContext } from "./tools/plan.ts";
 import { mathTeacherTools, requireConcealedAnswer, searchEvidenceTool } from "./tools/math.ts";
 import type { EvidenceStore } from "../core/math-evidence.ts";
 import type { ReviewStore } from "../core/memory/review.ts";
+import type { FsrsWeightsStore } from "../core/memory/fsrs.ts";
 import { reviewTools, type ReviewToolContext } from "./tools/review.ts";
 import type { TeachingProfile } from "../core/contracts/chat.ts";
 import { probeDoneTool, type ProbeDoneContext } from "./tools/probe.ts";
@@ -284,15 +286,17 @@ export interface ProberToolContext extends ProbeDoneContext {
 	evidenceStore?: EvidenceStore;
 	/** The review log: search_evidence's recall reflects reviews when present. */
 	reviewStore?: ReviewStore;
+	/** Fitted FSRS weights for search_evidence's recall (absent: defaults). */
+	weightsStore?: FsrsWeightsStore;
 }
 
 /** search_evidence for math mode, when the composition root wired the ledger. */
 function evidenceSearch(
-	ctx: { chatId: string; chatStore: PlanToolContext["chatStore"]; evidenceStore?: EvidenceStore; reviewStore?: ReviewStore },
+	ctx: { chatId: string; chatStore: PlanToolContext["chatStore"]; evidenceStore?: EvidenceStore; reviewStore?: ReviewStore; weightsStore?: FsrsWeightsStore },
 	profile?: TeachingProfile,
 ): Record<string, AgentTool<any>> {
 	if (profile !== "math" || !ctx.evidenceStore) return {};
-	const tool = searchEvidenceTool({ chatId: ctx.chatId, chatStore: ctx.chatStore, evidenceStore: ctx.evidenceStore, ...(ctx.reviewStore ? { reviewStore: ctx.reviewStore } : {}) });
+	const tool = searchEvidenceTool({ chatId: ctx.chatId, chatStore: ctx.chatStore, evidenceStore: ctx.evidenceStore, ...(ctx.reviewStore ? { reviewStore: ctx.reviewStore } : {}), ...(ctx.weightsStore ? { weightsStore: ctx.weightsStore } : {}) });
 	return { [tool.name]: tool };
 }
 
@@ -427,6 +431,8 @@ export interface TeacherToolContext extends PlanToolContext {
 	evidenceStore?: EvidenceStore;
 	/** The review log (see ProberToolContext). */
 	reviewStore?: ReviewStore;
+	/** Fitted FSRS weights (see ProberToolContext). */
+	weightsStore?: FsrsWeightsStore;
 }
 
 /**
@@ -494,6 +500,8 @@ export function createTeacherTools(
 			...(math ? { [math.recordEvidence.name]: math.recordEvidence } : {}),
 			...evidenceSearch(ctx, profile),
 			...planTools(ctx, { mathMode: profile === "math" }),
+			// Time-boxed sittings: goals and the close (tools/timebox.ts).
+			...(ctx.chatStore.getChat(ctx.chatId)?.settings?.timeboxMin ? timeboxTools(ctx) : {}),
 			...jobTools({ chatId: ctx.chatId, jobStore: ctx.jobStore, spawn: ctx.spawn, searchAvailable: ctx.searchAvailable }),
 		},
 		withoutMechanics(enabled),
@@ -507,7 +515,7 @@ export function createTeacherTools(
  *  jobs, no graph. */
 export function createReviewerTools(ctx: ReviewToolContext, enabled?: EnabledTools): Record<string, AgentTool<any>> {
 	const review = reviewTools(ctx);
-	const search = searchEvidenceTool({ chatId: ctx.chatId, chatStore: ctx.chatStore, evidenceStore: ctx.evidenceStore, reviewStore: ctx.reviewStore });
+	const search = searchEvidenceTool({ chatId: ctx.chatId, chatStore: ctx.chatStore, evidenceStore: ctx.evidenceStore, reviewStore: ctx.reviewStore, ...(ctx.weightsStore ? { weightsStore: ctx.weightsStore } : {}) });
 	return healToolRecord(
 		filterEnabledTools(
 			{
@@ -517,6 +525,8 @@ export function createReviewerTools(ctx: ReviewToolContext, enabled?: EnabledToo
 				[review.pickItems.name]: review.pickItems,
 				[review.recordReview.name]: review.recordReview,
 				[search.name]: search,
+				// A time-boxed review or consolidation sitting ends with close_session too.
+				...(ctx.chatStore.getChat(ctx.chatId)?.settings?.timeboxMin ? { close_session: timeboxTools(ctx).close_session! } : {}),
 			},
 			withoutMechanics(enabled),
 		),

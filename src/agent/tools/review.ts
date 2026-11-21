@@ -6,14 +6,15 @@
  * this session's plan map, so `explain` keeps its nodeId contract and the
  * plan panel shows the session. Design: docs/retention-mode-plan.md §5–§6.
  */
+import { MATURE_STABILITY_DAYS, memoryStage } from "../../core/memory/items.ts";
 import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { attemptedNodes, habitsOf, MATH_DIMENSIONS, MATH_HABITS, type EvidenceStore, type MathDimension } from "../../core/math-evidence.ts";
 import type { LhMessage } from "../../core/native-messages.ts";
 import { createTree } from "../../core/plan-tree.ts";
 import type { PlanEdge, PlanTree } from "../../core/contracts/plan.ts";
-import { dueAt, retrievabilityAt } from "../../core/memory/fsrs.ts";
-import { DEFAULT_DESIRED_RETENTION, memorySnapshot } from "../../core/memory/items.ts";
+import { dueAt, retrievabilityAt, type FsrsWeightsStore } from "../../core/memory/fsrs.ts";
+import { DEFAULT_DESIRED_RETENTION, memoryItems, memorySnapshot, trainingItems } from "../../core/memory/items.ts";
 import { RATING_LABELS, ratingFor, REVIEW_OUTCOMES, MAX_FOLLOW_UPS, retryQueue, RETRY_GAP, reviewCandidates, reviewNodeIds, type ReviewEvent, type ReviewStore } from "../../core/memory/review.ts";
 import { invalidInputResult } from "../tool-execute.ts";
 import type { PlanToolContext } from "./plan.ts";
@@ -28,6 +29,8 @@ const MAX_PICK = 12;
 export type ReviewToolContext = Pick<PlanToolContext, "chatId" | "chatStore"> & {
 	evidenceStore: EvidenceStore;
 	reviewStore: ReviewStore;
+	/** Fitted FSRS weights (absent: defaults) and the refit after each graded review. */
+	weightsStore?: FsrsWeightsStore;
 	now?: () => number;
 };
 
@@ -92,8 +95,10 @@ export function reviewTools(ctx: ReviewToolContext) {
 		const t = now();
 		const names = titles();
 		return reviewCandidates({
-			snapshot: memorySnapshot(records, t, { reviews }),
+			snapshot: memorySnapshot(records, t, { reviews, weights: ctx.weightsStore?.read() }),
 			records, reviews, edgesOf, nowMs: t, limit,
+			// Review is for mature items; a consolidation sitting takes the ones still in learning.
+			stage: record()?.settings?.consolidate ? "learning" : "mature",
 			sessionTitle: (chatId) => names.get(chatId) ?? chatId,
 		});
 	};
@@ -123,7 +128,7 @@ export function reviewTools(ctx: ReviewToolContext) {
 		execute: async (_id, input) => {
 			const ids = [...new Set(input.itemIds)];
 			const records = ctx.evidenceStore.list();
-			const snapshot = memorySnapshot(records, now(), { reviews: ctx.reviewStore.list() });
+			const snapshot = memorySnapshot(records, now(), { reviews: ctx.reviewStore.list(), weights: ctx.weightsStore?.read() });
 			const byId = new Map(snapshot.map((item) => [item.id, item]));
 			const unknown = ids.filter((id) => !byId.has(id));
 			if (unknown.length) return invalidInputResult(PICK_ITEMS_TOOL, [`No memory item has id ${unknown.join(", ")}. Copy ids from due_items exactly.`]);
@@ -184,7 +189,8 @@ export function reviewTools(ctx: ReviewToolContext) {
 							: undefined;
 				if (problem) return invalidInputResult(RECORD_REVIEW_TOOL, [`followUp on ${input.nodeId}: ${problem}.`]);
 			}
-			const before = memorySnapshot(ctx.evidenceStore.list(), t, { reviews }).find((item) => item.id === itemId);
+			const weights = ctx.weightsStore?.read();
+			const before = memorySnapshot(ctx.evidenceStore.list(), t, { reviews, weights }).find((item) => item.id === itemId);
 			const followUp = input.followUp === true;
 			const retry = !followUp && onItem.length > 0;
 			// NOTHING TO INTERLEAVE (owner, 2026-11-19): an Again on the last
@@ -208,11 +214,15 @@ export function reviewTools(ctx: ReviewToolContext) {
 				question: input.question, note: input.note,
 				...(habits ? { habits } : {}),
 				...((input.noRetry || nothingToInterleave) && rating === 1 ? { noRetry: true } : {}),
-				...(before?.state ? { predicted: Math.round(retrievabilityAt(before.state, t) * 1000) / 1000 } : {}),
+				...(before?.state ? { predicted: Math.round(retrievabilityAt(before.state, t, weights) * 1000) / 1000 } : {}),
 			};
 			ctx.reviewStore.append(event);
-			const after = memorySnapshot(ctx.evidenceStore.list(), t, { reviews: [...reviews, event] }).find((item) => item.id === itemId);
-			const nextDue = after?.state ? new Date(dueAt(after.state, DEFAULT_DESIRED_RETENTION, retry || followUp ? undefined : rating)).toISOString() : undefined;
+			const records = ctx.evidenceStore.list();
+			// Refit FSRS to the grown log (docs/fsrs7-plan.md): fire-and-forget,
+			// gated in core/memory/fit.ts; new weights apply from the next read.
+			if (ctx.weightsStore) void ctx.weightsStore.refit(trainingItems(memoryItems(records, [...reviews, event])));
+			const after = memorySnapshot(records, t, { reviews: [...reviews, event], weights }).find((item) => item.id === itemId);
+			const nextDue = after?.state ? new Date(dueAt(after.state, DEFAULT_DESIRED_RETENTION, retry || followUp ? undefined : rating, undefined, weights)).toISOString() : undefined;
 			const slugs = picks()!;
 			const slugOf = new Map([...slugs].map(([slug, id]) => [id, slug]));
 			const queue = retryQueue([...reviews, event].filter((e) => e.chatId === ctx.chatId), [...slugs.values()]);
@@ -221,7 +231,9 @@ export function reviewTools(ctx: ReviewToolContext) {
 				? `Now ask the deferred retry on ${names(queue.ready.slice(0, 1))}: a DIFFERENT question from both earlier ones, at the same rung as the one that failed (for a stale item, another plain K question), with no reminder of the repair.`
 				: queue.remaining.length
 					? "Move to the next item."
-					: "All items and retries are done: close the session.";
+					: record()?.settings?.timeboxMin
+						? "All items and retries are done: give the closing summary, then call close_session with the hand-off (verdicts: []). The sitting is not closed until close_session succeeds."
+						: "All items and retries are done: close the session.";
 			const followUpsLeft = MAX_FOLLOW_UPS - onItem.filter((e) => e.kind === "followup").length - (followUp ? 1 : 0);
 			const climb = `You may climb one rung: a harder question on this item (U or S, then a P step), graded with followUp: true; it does not move the schedule. Otherwise: ${nextStep}`;
 			const instruction = followUp
@@ -241,8 +253,12 @@ export function reviewTools(ctx: ReviewToolContext) {
 						? "Again: give one short repair aimed at the exact gap. Nothing is left to interleave, so then ask the retry: a DIFFERENT question about this item."
 						: `Again: give one short repair aimed at the exact gap now, but do NOT retry yet. The retry waits until ${RETRY_GAP} other items have been asked (or until none are left), so it tests retrieval rather than the repair you just gave. Then: ${nextStep}`
 					: rating >= 3 ? `${RATING_LABELS[rating]} on this rung. ${climb}` : nextStep;
+			// Graduation (consolidation plan §4): a first attempt that lifts stability past the mature line.
+			const matured = !retry && !followUp && before && after && memoryStage(before) === "learning" && memoryStage(after) === "mature";
 			return ok({
 				ok: true, rating: RATING_LABELS[rating], kind: event.kind, ...(nextDue ? { nextDue } : {}),
+				...(after?.daysTo90 != null ? { stability: Math.round(after.daysTo90 * 10) / 10, stage: memoryStage(after) } : {}),
+				...(matured ? { matured: `This item is now mature (stability ≥ ${MATURE_STABILITY_DAYS} days): from here on it is reviewed, not consolidated. Say so in the closing summary.` } : {}),
 				retries: { waiting: queue.waiting.map((id) => slugOf.get(id) ?? id), ready: queue.ready.map((id) => slugOf.get(id) ?? id) },
 				instruction,
 			});

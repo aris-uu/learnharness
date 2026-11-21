@@ -250,13 +250,14 @@ export function newAnswerResult(
 	toolCallId: string,
 	toolName: string,
 	answer: unknown,
+	extra?: Record<string, unknown>,
 ): LhMessage & ToolResultMessage {
 	return {
 		id: newMessageId(),
 		role: "toolResult",
 		toolCallId,
 		toolName,
-		content: nativeAnswerContent(JSON.stringify(compactAnswerForModel(answer as QuestionAnswerData)), (answer as QuestionAnswerData).images),
+		content: nativeAnswerContent(JSON.stringify({ ...compactAnswerForModel(answer as QuestionAnswerData), ...extra }), (answer as QuestionAnswerData).images),
 		// 0.87.1 narrowed ToolResultMessage.details to JsonRepresentation —
 		// our payloads are JSON-safe answer structures, so the cast is honest.
 		details: answer as ToolResultMessage["details"],

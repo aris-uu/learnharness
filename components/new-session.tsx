@@ -11,7 +11,7 @@ import { useOptionalInteractionLayers } from "./interaction-layers";
 import { isInteractionScopeEligible } from "./plugin-input-focus";
 import { SidebarToggle } from "@/components/sidebar";
 import { SetupDialog } from "@/components/setup-dialog";
-import { DraftMathModeToggle, readDraftMathMode } from "@/components/math-mode";
+import { DraftConsolidateToggle, DraftMathModeToggle, DraftTimeboxSelect, readDraftConsolidate, readDraftMathMode, readDraftTimebox } from "@/components/math-mode";
 import { useModelSetup, selectedModelUnavailable, openModelPicker, ZeroKeysPill } from "@/components/setup-cta";
 import { StatsBar } from "@/components/stats-bar";
 import { ChainTableOverlay } from "@/components/chain-table.tsx";
@@ -64,8 +64,8 @@ export async function startDraftSession(
 		mode === "practice"
 			? { title: t, kind: "practice", ...(picks && picks.length > 0 ? { graphContext: { propositions: picks } } : {}) }
 			: mode === "review"
-			? { title: t, kind: "review" }
-			: { title: t, ...(readDraftMathMode() ? { profile: "math" as const } : {}) },
+			? { title: t, kind: "review", ...(readDraftConsolidate() ? { consolidate: true } : {}), ...(readDraftTimebox() ? { timeboxMin: readDraftTimebox()! } : {}) }
+			: { title: t, ...(readDraftMathMode() ? { profile: "math" as const } : {}), ...(readDraftTimebox() ? { timeboxMin: readDraftTimebox()! } : {}) },
 		fetchLike,
 		settingsIdentity,
 	);
@@ -201,6 +201,8 @@ export function DraftShell({
 								<ComposerActions
 									picker={<>
 										{mode === "teach" && <DraftMathModeToggle />}
+										{mode === "review" && <DraftConsolidateToggle />}
+										{mode !== "practice" && <DraftTimeboxSelect />}
 										{(picks.length > 0 || mode === "practice") && (
 											<NodePickerControl count={picks.length} onOpen={onOpenPicker} onClear={onClearPicks} />
 										)}
