@@ -69,6 +69,12 @@ describe("FSRS core (ts-fsrs FSRS-7)", () => {
 		assert.equal(dueAt(state, 0.85), T0 + intervalDays(state, 0.85) * DAY);
 	});
 
+	it("any rated event waits at least a day: no same-day repeat after a Hard", () => {
+		const state = rateFsrs(null, 2, T0);
+		assert.ok(dueAt(state, 0.85, 2) >= T0 + DAY);
+		assert.ok(dueAt(state, 0.85, 3) >= T0 + DAY);
+	});
+
 	it("custom weights change the schedule", () => {
 		const weights = FSRS_DEFAULT_WEIGHTS.map((w, i) => (i === 2 ? w * 2 : w));
 		assert.equal(rateFsrs(null, 3, T0, weights).stability, FSRS_DEFAULT_WEIGHTS[2]! * 2);

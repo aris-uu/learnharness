@@ -13,10 +13,11 @@ import { attemptedNodes, habitsOf, MATH_DIMENSIONS, MATH_HABITS, type EvidenceSt
 import type { LhMessage } from "../../core/native-messages.ts";
 import { createTree } from "../../core/plan-tree.ts";
 import type { PlanEdge, PlanTree } from "../../core/contracts/plan.ts";
-import { dueAt, retrievabilityAt, type FsrsWeightsStore } from "../../core/memory/fsrs.ts";
+import { retrievabilityAt, type FsrsWeightsStore } from "../../core/memory/fsrs.ts";
 import { DEFAULT_DESIRED_RETENTION, memoryItems, memorySnapshot, trainingItems } from "../../core/memory/items.ts";
-import { RATING_LABELS, ratingFor, REVIEW_OUTCOMES, MAX_FOLLOW_UPS, retryQueue, RETRY_GAP, reviewCandidates, reviewNodeIds, type ReviewEvent, type ReviewStore } from "../../core/memory/review.ts";
+import { RATING_LABELS, ratingFor, REVIEW_CHECKS, REVIEW_OUTCOMES, MAX_FOLLOW_UPS, retryQueue, RETRY_GAP, reviewCandidates, reviewNodeIds, type ReviewEvent, type ReviewStore } from "../../core/memory/review.ts";
 import { invalidInputResult } from "../tool-execute.ts";
+import { minutesIntoSitting } from "../../core/session-clock.ts";
 import type { PlanToolContext } from "./plan.ts";
 
 export const DUE_ITEMS_TOOL = "due_items";
@@ -59,7 +60,8 @@ const recordReviewInput = Type.Object({
 	question: Type.String({ minLength: 1, description: "The question you asked, in one line." }),
 	note: Type.String({ minLength: 1, description: "One line naming what was shown or what was missing." }),
 	habits: Type.Optional(Type.Array(literals(MATH_HABITS), { description: "When the attempt fell short: which recurring habit caused it." })),
-	followUp: Type.Optional(Type.Boolean({ description: "This answers a harder rung asked after a clean answer on the same item (the easy-to-hard ladder). Logged; it does not move the schedule." })),
+	followUp: Type.Optional(Type.Boolean({ description: "This answers a harder rung asked after a clean answer on the same item (the easy-to-hard ladder). Logged; a failed one (Hard or Again) lowers the item's first attempt one step (Easy → Good, Good → Hard)." })),
+	check: Type.Optional(Type.Union(REVIEW_CHECKS.map((value) => Type.Literal(value)), { description: "Log-only answers on an item that already had its first attempt here. \"repair\": the learner's rebuild right after you repaired a failed rung. \"close\": the sitting's blank-page retrieval on this item. Never moves the schedule and is never the deferred retry." })),
 	noRetry: Type.Optional(Type.Boolean({ description: "The learner said this was never consolidated (or asked to skip it): no retry; it goes to a teach session instead." })),
 });
 
@@ -165,7 +167,7 @@ export function reviewTools(ctx: ReviewToolContext) {
 		description:
 			"Grade the learner's written answer on a picked item. Report the outcome; the server sets the FSRS rating " +
 			"(incorrect, 2+ hints, or a load-bearing partial = Again; other partial, slow or 1 hint = Hard; clean = Good; clean, fast and ≥90% confident = Easy). " +
-			"Only the first attempt on an item in a session moves its schedule; later ones are logged as retries. After an Again the retry is deferred behind other items. Returns the rating, the next due date, the retry queue and what to do next.",
+			"Only the first attempt on an item in a session moves its schedule; later ones are logged as retries, follow-ups (followUp) or checks (check: repair / close). After an Again the retry is deferred behind other items. Returns the rating, the next due date, the retry queue and what to do next.",
 		parameters: recordReviewInput,
 		executionMode: "sequential",
 		execute: async (toolCallId, input) => {
@@ -179,11 +181,19 @@ export function reviewTools(ctx: ReviewToolContext) {
 			const t = now();
 			const onItem = reviews.filter((e) => e.chatId === ctx.chatId && e.itemId === itemId);
 			const ladder = onItem.filter((e) => e.kind === "review" || e.kind === "followup");
+			if (input.check) {
+				const problem = input.followUp
+					? "pass either check or followUp, not both"
+					: !onItem.some((e) => e.kind === "review")
+						? "a check needs a graded first attempt on this item in this sitting; grade the first attempt without check first"
+						: undefined;
+				if (problem) return invalidInputResult(RECORD_REVIEW_TOOL, [`check on ${input.nodeId}: ${problem}.`]);
+			}
 			if (input.followUp) {
 				const problem = !onItem.some((e) => e.kind === "review")
 					? "a follow-up needs a graded first attempt on this item; grade the easy rung without followUp first"
 					: ladder.at(-1)!.rating < 3
-						? "climb only after a clean answer: the last rung on this item was not Good or Easy"
+						? "climb only after a clean answer: the last rung on this item was not Good or Easy. If this answers your repair's rebuild question, record it with check: \"repair\" instead"
 						: onItem.filter((e) => e.kind === "followup").length >= MAX_FOLLOW_UPS
 							? `at most ${MAX_FOLLOW_UPS} follow-ups per item; move on`
 							: undefined;
@@ -192,20 +202,22 @@ export function reviewTools(ctx: ReviewToolContext) {
 			const weights = ctx.weightsStore?.read();
 			const before = memorySnapshot(ctx.evidenceStore.list(), t, { reviews, weights }).find((item) => item.id === itemId);
 			const followUp = input.followUp === true;
-			const retry = !followUp && onItem.length > 0;
+			const check = input.check;
+			const retry = !followUp && !check && onItem.length > 0;
 			// NOTHING TO INTERLEAVE (owner, 2026-11-19): an Again on the last
 			// first attempt, with no other retry still owed, would be retried
 			// straight after its repair, which measures the repair. Skip it:
 			// the item is due again within a day, and that review is the retry.
 			const sessionSoFar = reviews.filter((e) => e.chatId === ctx.chatId);
 			const queueBefore = retryQueue(sessionSoFar, [...(picks()?.values() ?? [])]);
-			const lastFirst = !followUp && !retry && queueBefore.remaining.length === 1 && queueBefore.remaining[0] === itemId;
+			const lastFirst = !followUp && !check && !retry && queueBefore.remaining.length === 1 && queueBefore.remaining[0] === itemId;
 			const nothingToInterleave = lastFirst && queueBefore.waiting.length === 0 && queueBefore.ready.length === 0;
 			const rating = ratingFor(input);
 			const habits = habitsOf(input.habits);
 			const event: ReviewEvent = {
 				id: toolCallId, itemId, chatId: ctx.chatId, at: new Date(t).toISOString(),
-				kind: followUp ? "followup" : retry ? "retry" : "review", rating,
+				kind: check ? "check" : followUp ? "followup" : retry ? "retry" : "review", rating,
+				...(check ? { check } : {}),
 				dimension: input.dimension as MathDimension, outcome: input.outcome, hints: input.hints,
 				...(input.loadBearing !== undefined ? { loadBearing: input.loadBearing } : {}),
 				...(input.confidence !== undefined ? { confidence: input.confidence } : {}),
@@ -213,33 +225,44 @@ export function reviewTools(ctx: ReviewToolContext) {
 				...(input.expectedSeconds !== undefined ? { expectedSeconds: input.expectedSeconds } : {}),
 				question: input.question, note: input.note,
 				...(habits ? { habits } : {}),
-				...((input.noRetry || nothingToInterleave) && rating === 1 ? { noRetry: true } : {}),
+				...(!check && (input.noRetry || nothingToInterleave) && rating === 1 ? { noRetry: true } : {}),
+				minutesIn: minutesIntoSitting(messages, t, record()?.settings),
 				...(before?.state ? { predicted: Math.round(retrievabilityAt(before.state, t, weights) * 1000) / 1000 } : {}),
 			};
 			ctx.reviewStore.append(event);
 			const records = ctx.evidenceStore.list();
 			// Refit FSRS to the grown log (docs/fsrs7-plan.md): fire-and-forget,
 			// gated in core/memory/fit.ts; new weights apply from the next read.
-			if (ctx.weightsStore) void ctx.weightsStore.refit(trainingItems(memoryItems(records, [...reviews, event])));
+			if (ctx.weightsStore && !check) void ctx.weightsStore.refit(trainingItems(memoryItems(records, [...reviews, event])));
 			const after = memorySnapshot(records, t, { reviews: [...reviews, event], weights }).find((item) => item.id === itemId);
-			const nextDue = after?.state ? new Date(dueAt(after.state, DEFAULT_DESIRED_RETENTION, retry || followUp ? undefined : rating, undefined, weights)).toISOString() : undefined;
+			// The item's own due date (last schedule-moving rating, 1-day floor), so a retry or follow-up reports the same date as the first attempt.
+			const nextDue = after?.state ? after.dueAt : undefined;
 			const slugs = picks()!;
 			const slugOf = new Map([...slugs].map(([slug, id]) => [id, slug]));
 			const queue = retryQueue([...reviews, event].filter((e) => e.chatId === ctx.chatId), [...slugs.values()]);
 			const names = (ids: readonly string[]) => ids.map((id) => slugOf.get(id) ?? id).join(", ");
+			const consolidating = record()?.settings?.consolidate === true;
+			const closeChecked = new Set([...reviews, event].filter((e) => e.chatId === ctx.chatId && e.kind === "check" && e.check === "close").map((e) => e.itemId));
+			const attemptedHere = [...new Set([...reviews, event].filter((e) => e.chatId === ctx.chatId && e.kind === "review").map((e) => e.itemId))];
+			const closeOwed = attemptedHere.filter((id) => !closeChecked.has(id));
+			const closeStep = consolidating && closeOwed.length
+				? `Before the closing summary, the close: one blank-page retrieval per item, written from scratch with nothing on screen (state the item's central statement or step again), each graded with record_review and check: "close". Still owed on: ${names(closeOwed)}. `
+				: "";
 			const nextStep = queue.ready.length
 				? `Now ask the deferred retry on ${names(queue.ready.slice(0, 1))}: a DIFFERENT question from both earlier ones, at the same rung as the one that failed (for a stale item, another plain K question), with no reminder of the repair.`
 				: queue.remaining.length
 					? "Move to the next item."
 					: record()?.settings?.timeboxMin
-						? "All items and retries are done: give the closing summary, then call close_session with the hand-off (verdicts: []). The sitting is not closed until close_session succeeds."
-						: "All items and retries are done: close the session.";
+						? `All items and retries are done. ${closeStep}Then give the closing summary and call close_session with the hand-off (verdicts: []). The sitting is not closed until close_session succeeds.`
+						: `All items and retries are done. ${closeStep}Then close the session.`;
 			const followUpsLeft = MAX_FOLLOW_UPS - onItem.filter((e) => e.kind === "followup").length - (followUp ? 1 : 0);
 			const climb = `You may climb one rung: a harder question on this item (U or S, then a P step), graded with followUp: true; it does not move the schedule. Otherwise: ${nextStep}`;
-			const instruction = followUp
+			const instruction = check
+				? `${check === "repair" ? "Repair check" : "Close check"} logged (never moves the schedule, and it is not the retry). ${nextStep}`
+				: followUp
 				? rating >= 3
 					? followUpsLeft > 0 ? `Follow-up held (logged, not scheduled). ${climb}` : `Follow-up held (logged, not scheduled). ${nextStep}`
-					: `The harder rung slipped. It does not move the schedule and gets no retry: say in one line what was missing, then: ${nextStep}`
+					: `The harder rung slipped. It gets no retry, and it lowers this item's first attempt one step, so the item comes back sooner: say in one line what was missing, then: ${nextStep}`
 				: retry
 				? rating === 1
 					? `The retry also failed. Stop drilling this item: note it for a teach session (offer it in the closing summary). ${nextStep}`
@@ -254,7 +277,7 @@ export function reviewTools(ctx: ReviewToolContext) {
 						: `Again: give one short repair aimed at the exact gap now, but do NOT retry yet. The retry waits until ${RETRY_GAP} other items have been asked (or until none are left), so it tests retrieval rather than the repair you just gave. Then: ${nextStep}`
 					: rating >= 3 ? `${RATING_LABELS[rating]} on this rung. ${climb}` : nextStep;
 			// Graduation (consolidation plan §4): a first attempt that lifts stability past the mature line.
-			const matured = !retry && !followUp && before && after && memoryStage(before) === "learning" && memoryStage(after) === "mature";
+			const matured = !retry && !followUp && !check && before && after && memoryStage(before) === "learning" && memoryStage(after) === "mature";
 			return ok({
 				ok: true, rating: RATING_LABELS[rating], kind: event.kind, ...(nextDue ? { nextDue } : {}),
 				...(after?.daysTo90 != null ? { stability: Math.round(after.daysTo90 * 10) / 10, stage: memoryStage(after) } : {}),

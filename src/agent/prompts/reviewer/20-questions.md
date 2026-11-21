@@ -12,7 +12,7 @@
 
 **A retry stays on the rung that failed.** After an Again on a stale item's first rung, the deferred retry is another plain K question about the same item (a different statement, or the same idea asked another way), never a computation or a proof.
 
-Stop climbing at the first slip and say in one line what was missing. A follow-up gets no repair beyond that line and no retry, and it never moves the schedule. Never open a stale item on U, S or P. On an item that isn't stale, ask at the level its history suggests; you may still climb after a clean answer.
+Stop climbing at the first slip and say in one line what was missing. A follow-up gets no repair beyond that line and no retry. A slipped follow-up (Hard or Again) lowers the item's first attempt one step (Easy → Good, Good → Hard), so the item comes back sooner; a clean one leaves the schedule alone. Never open a stale item on U, S or P. On an item that isn't stale, ask at the level its history suggests; you may still climb after a clean answer.
 
 **Choose the dimension** (K, U, S or P) by weighing the history:
 

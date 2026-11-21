@@ -25,6 +25,7 @@ import { DEFAULT_DESIRED_RETENTION, memoryItemId, memorySnapshot } from "../../c
 import type { ReviewStore } from "../../core/memory/review.ts";
 import type { FsrsWeightsStore } from "../../core/memory/fsrs.ts";
 import { invalidInputResult } from "../tool-execute.ts";
+import { minutesIntoSitting } from "../../core/session-clock.ts";
 import type { PlanToolContext } from "./plan.ts";
 
 const literals = <T extends string>(values: readonly T[]) => Type.Union(values.map((value) => Type.Literal(value)));
@@ -119,7 +120,7 @@ export function mathTeacherTools(ctx: MathToolContext) {
 		const messages = (record?.messages ?? []) as LhMessage[];
 		const persisted = evidenceFromMessages(messages);
 		const known = new Set(persisted.map((entry) => entry.id));
-		return { tree: record?.tree, messages, evidence: [...persisted, ...thisRun.filter((entry) => !known.has(entry.id))] };
+		return { tree: record?.tree, settings: record?.settings, messages, evidence: [...persisted, ...thisRun.filter((entry) => !known.has(entry.id))] };
 	};
 
 	const gateExplain = (tool: AgentTool<any>): AgentTool<any> => requireConcealedAnswer({
@@ -154,7 +155,7 @@ export function mathTeacherTools(ctx: MathToolContext) {
 		executionMode: "sequential",
 		execute: async (toolCallId, input) => {
 			const entry = input as EvidenceInput;
-			const { tree, messages, evidence } = readRecord();
+			const { tree, settings, messages, evidence } = readRecord();
 			if (!tree?.nodes.some((node) => node.id === entry.nodeId)) {
 				return invalidInputResult(RECORD_EVIDENCE_TOOL, [`nodeId "${entry.nodeId}" matches no node in this session's plan map.`]);
 			}
@@ -169,7 +170,8 @@ export function mathTeacherTools(ctx: MathToolContext) {
 			const saved: MathEvidence = { ...rest, id: toolCallId, ...(habits ? { habits } : {}) };
 			thisRun.push(saved);
 			// The chat record stays the gate's truth; a failed ledger copy is logged, not fatal.
-			try { ctx.evidenceStore?.append(evidenceRecord(ctx.chatId, saved, tree, new Date().toISOString())); }
+			const t = Date.now();
+			try { ctx.evidenceStore?.append({ ...evidenceRecord(ctx.chatId, saved, tree, new Date(t).toISOString()), minutesIn: minutesIntoSitting(messages, t, settings) }); }
 			catch (error) { console.error(`[evidence] ledger append failed for ${ctx.chatId}:`, error); }
 			const all = [...evidence, saved];
 			const pitch = mathPitch(all);

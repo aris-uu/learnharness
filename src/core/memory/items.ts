@@ -32,9 +32,28 @@ export const memoryItemId = (chatId: string, nodeId: string) => `${chatId}#${nod
 export interface MemoryEvent {
 	itemId: string;
 	at: string;
-	/** seed and review move the schedule; retry and followup are logged only. */
-	kind: "seed" | "review" | "retry" | "followup";
+	/** seed and review move the schedule; retry, followup and check are logged only. */
+	kind: "seed" | "review" | "retry" | "followup" | "check";
 	rating: FsrsRating;
+	/** The sitting it happened in (review events carry it; seeds do not). */
+	chatId?: string;
+	/** The rating as graded, when a failed follow-up in the same sitting capped it (capByFollowUps). */
+	cappedFrom?: FsrsRating;
+}
+
+/**
+ * THE EASY RUNG DOES NOT MATURE AN ITEM ALONE (owner, 2026-11-21): a first
+ * attempt is asked on the easiest rung, so a clean statement followed by a
+ * failed harder rung in the same sitting (a follow-up rated Again or Hard)
+ * lowers that first attempt one step: Easy → Good, Good → Hard. Hard and
+ * Again stay. Pure; applied on every replay, so the stored log is unchanged.
+ */
+export function capByFollowUps(events: readonly MemoryEvent[]): MemoryEvent[] {
+	return events.map((event) => {
+		if (event.kind !== "review" || event.rating < 3 || !event.chatId) return event;
+		const slipped = events.some((f) => f.kind === "followup" && f.chatId === event.chatId && f.itemId === event.itemId && ms(f.at) >= ms(event.at) && f.rating <= 2);
+		return slipped ? { ...event, rating: (event.rating - 1) as FsrsRating, cappedFrom: event.rating } : event;
+	});
 }
 
 export type MemoryItemStatus =
@@ -111,11 +130,11 @@ export function seedFor(records: readonly EvidenceRecord[]): { status: MemoryIte
 	return { status: "scheduled", rating, at: credited.at(-1)!.recordedAt };
 }
 
-/** Replay events into an FSRS state; retries never move the schedule. */
+/** Replay events into an FSRS state; only seeds and first attempts move the schedule. */
 export function replay(events: readonly MemoryEvent[], weights?: FsrsWeights): FsrsState | undefined {
 	let state: FsrsState | null = null;
 	for (const event of [...events].sort((a, b) => ms(a.at) - ms(b.at))) {
-		if (event.kind === "retry" || event.kind === "followup") continue;
+		if (event.kind !== "seed" && event.kind !== "review") continue;
 		const at = ms(event.at);
 		if (!Number.isFinite(at)) continue;
 		state = rateFsrs(state, event.rating, at, weights);
@@ -144,10 +163,10 @@ export function memoryItems(records: readonly EvidenceRecord[], reviews: readonl
 		if (!seed) continue;
 		const latest = list.at(-1)!;
 		const named = [...list].reverse().find((e) => e.nodeTitle && e.nodeTitle !== e.nodeId) ?? latest;
-		const events: MemoryEvent[] = [
+		const events: MemoryEvent[] = capByFollowUps([
 			...(seed.rating && seed.at ? [{ itemId: id, at: seed.at, kind: "seed" as const, rating: seed.rating }] : []),
 			...(reviewsBy.get(id) ?? []),
-		].sort((a, b) => ms(a.at) - ms(b.at));
+		].sort((a, b) => ms(a.at) - ms(b.at)));
 		const state = replay(events, weights);
 		items.push({
 			id,

@@ -90,7 +90,7 @@ The tutor only paces if it is told the time. It should be told without a model c
 |---|---|
 | `set_goals({goals})` | Writes `timebox.goals`. It can be called again only with the learner's agreement, and the result says when goals were changed. |
 | `begin_close()` | Sets `closingStartedAt`; the phase becomes `close`. |
-| `close_session({verdicts, handoff})` | Checks that every goal has a verdict and that each "met" has at least one credited evidence record on its nodes in this session, then sets `closedAt`. A "met" with no evidence is refused. |
+| `close_session({verdicts, handoff})` | Checks that every goal has a verdict and that each "met" has credited evidence on **every** node of the goal in this session (2026-11-21; it was one node), then sets `closedAt`. A "met" with an uncredited node is refused. |
 
 ## 5. Sizing the plan to the budget
 

@@ -73,6 +73,21 @@ export function activeMinutes(messages: readonly unknown[], nowMs?: number, gapM
 	return total;
 }
 
+/**
+ * Active minutes into the current sitting at `nowMs`, for `minutesIn` on
+ * evidence and review records (timeboxed plan §2). A time-boxed chat is one
+ * sitting, so it is the clock's used time; otherwise the sitting starts after
+ * the last gap of `gapMin` or more. Rounded to 0.1.
+ */
+export function minutesIntoSitting(messages: readonly unknown[], nowMs: number, settings?: { timeboxMin?: number; timebox?: TimeboxState }): number {
+	if (settings?.timeboxMin) return Math.round(activeMinutes(messages, nowMs, TIMEBOX_GAP_MIN, settings.timebox?.breaks) * 10) / 10;
+	const ts = messages.map(stamp).filter((t): t is number => t !== null && t <= nowMs).sort((a, b) => a - b);
+	ts.push(nowMs);
+	let start = 0;
+	for (let i = 1; i < ts.length; i++) if ((ts[i]! - ts[i - 1]!) / 60_000 >= TIMEBOX_GAP_MIN) start = i;
+	return Math.round(activeMinutes(ts.slice(start).map((timestamp) => ({ timestamp })), undefined) * 10) / 10;
+}
+
 export function sessionClock(messages: readonly unknown[], budgetMin: number, nowMs: number, state: TimeboxState = {}): SessionClock {
 	const budget = budgetMin + (state.extendedMin ?? 0);
 	const usedMin = Math.round(activeMinutes(messages, nowMs, TIMEBOX_GAP_MIN, state.breaks));
@@ -106,10 +121,15 @@ export function timeboxDoctrine(budgetMin: number, kind: "teach" | "review" | "c
 **This sitting was reopened after about ${resumedHours} hours.** Before anything new, open with a 3-minute recap retrieval: one short written question on what this sitting already covered, without restating it first. Then continue toward the goals.`
 		: "";
 	if (kind !== "teach") {
-		const items = kind === "consolidate" ? Math.max(1, Math.floor(budgetMin / 12)) : Math.max(1, Math.floor(budgetMin / 3));
+		// FILL THE SITTING (owner, 2026-11-21): at /12 the first four 25-minute
+		// consolidation sittings picked 2–3 items and ended after 6–15 minutes.
+		// Observed pace: about 5 minutes per item with its ladder; a re-teach costs more.
+		const items = kind === "consolidate" ? Math.max(2, Math.floor(budgetMin / 6)) : Math.max(1, Math.floor(budgetMin / 3));
 		return `# Time box: this sitting is ${budgetMin} active minutes
 
 Pick about ${items} items with pick_items (not the default), so the sitting fits. Each learner answer carries \`clock: {usedMin, leftMin, phase}\`. At phase "converge" start no new item; at "close" finish the current item.
+
+**Use the budget.** If the picked items are done and more than about 8 minutes are left before "converge", call pick_items again with the items already asked plus more due ones, and keep going. Ending early is for a learner who wants to stop, not for a finished list.
 
 **End every sitting with \`close_session\`**, when the items are done or the time is up, whichever comes first: write the closing summary, then call \`close_session\` with \`verdicts: []\` and a hand-off (per item: what holds, what is fragile, when it is due; anything to teach next). A closing summary in prose without the call leaves the sitting open; the learner then has no "Continue" card.${resume}`;
 	}
