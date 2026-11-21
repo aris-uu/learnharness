@@ -5,6 +5,7 @@ import { renderWithInteractionLayers as renderToStaticMarkup } from "./interacti
 import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { DraftShell, startDraftSession } from "../components/new-session.tsx";
+import { stashContinueDraft, takeContinueDraft } from "../components/math-mode.tsx";
 import { clearOpeningPrompt, readOpeningPrompt, OPENING_PROMPT_FAILURE } from "../components/opening-prompt.ts";
 
 const originalStorage = Object.getOwnPropertyDescriptor(globalThis, "sessionStorage");
@@ -81,6 +82,34 @@ describe("startDraftSession — the create-on-send contract", () => {
 			assert.equal(stashed, text);
 			clearOpeningPrompt("c_long");
 			assert.equal(readOpeningPrompt("c_long"), undefined);
+		} finally {
+			if (prev === undefined) delete holder.sessionStorage;
+			else Object.defineProperty(globalThis, "sessionStorage", { configurable: true, value: prev });
+		}
+	});
+
+	it("a continued sitting's draft links the new session; other modes ignore the link", async () => {
+		const { f, calls } = fakeFetch("c_cont");
+		await startDraftSession("Continue from \"Topology\".", f, undefined, undefined, undefined, undefined, "chat_closed");
+		assert.deepEqual(calls[0]!.body, { title: "Continue from \"Topology\".", continuesFrom: "chat_closed" });
+		await startDraftSession("practice", f, "practice", undefined, undefined, undefined, "chat_closed");
+		assert.equal((calls[1]!.body as { continuesFrom?: string }).continuesFrom, undefined);
+	});
+
+	it("the Continue stash is taken once, and a malformed one is dropped", () => {
+		const mem = new Map<string, string>();
+		const fake = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => { mem.set(k, v); }, removeItem: (k: string) => { mem.delete(k); } };
+		const holder = globalThis as { sessionStorage?: Storage };
+		const prev = holder.sessionStorage;
+		Object.defineProperty(globalThis, "sessionStorage", { configurable: true, value: fake });
+		try {
+			assert.equal(takeContinueDraft(), null);
+			assert.equal(stashContinueDraft({ text: "Hand-off", continuesFrom: "chat_closed" }), true);
+			assert.deepEqual(takeContinueDraft(), { text: "Hand-off", continuesFrom: "chat_closed" });
+			assert.equal(takeContinueDraft(), null, "one draft visit takes it");
+			mem.set("lh.continue-draft", JSON.stringify({ text: 1 }));
+			assert.equal(takeContinueDraft(), null);
+			assert.equal(mem.size, 0);
 		} finally {
 			if (prev === undefined) delete holder.sessionStorage;
 			else Object.defineProperty(globalThis, "sessionStorage", { configurable: true, value: prev });

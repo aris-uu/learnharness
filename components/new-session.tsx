@@ -11,7 +11,7 @@ import { useOptionalInteractionLayers } from "./interaction-layers";
 import { isInteractionScopeEligible } from "./plugin-input-focus";
 import { SidebarToggle } from "@/components/sidebar";
 import { SetupDialog } from "@/components/setup-dialog";
-import { DraftConsolidateToggle, DraftMathModeToggle, DraftTimeboxSelect, readDraftConsolidate, readDraftMathMode, readDraftTimebox } from "@/components/math-mode";
+import { DraftConsolidateToggle, DraftMathModeToggle, DraftTimeboxSelect, readDraftConsolidate, readDraftMathMode, readDraftTimebox, takeContinueDraft } from "@/components/math-mode";
 import { useModelSetup, selectedModelUnavailable, openModelPicker, ZeroKeysPill } from "@/components/setup-cta";
 import { StatsBar } from "@/components/stats-bar";
 import { ChainTableOverlay } from "@/components/chain-table.tsx";
@@ -52,6 +52,8 @@ export async function startDraftSession(
 	picks?: readonly DraftPick[],
 	starter = new SessionStarter(),
 	settingsIdentity?: string,
+	/** The closed sitting this draft continues (teach drafts only). */
+	continuesFrom?: string,
 ): Promise<string | null> {
 	// A review draft may be sent empty: the reviewer then picks what's due.
 	const t = text.trim() || (mode === "review" ? REVIEW_OPENING_PROMPT : "");
@@ -65,7 +67,7 @@ export async function startDraftSession(
 			? { title: t, kind: "practice", ...(picks && picks.length > 0 ? { graphContext: { propositions: picks } } : {}) }
 			: mode === "review"
 			? { title: t, kind: "review", ...(readDraftConsolidate() ? { consolidate: true } : {}), ...(readDraftTimebox() ? { timeboxMin: readDraftTimebox()! } : {}) }
-			: { title: t, ...(readDraftMathMode() ? { profile: "math" as const } : {}), ...(readDraftTimebox() ? { timeboxMin: readDraftTimebox()! } : {}) },
+			: { title: t, ...(readDraftMathMode() ? { profile: "math" as const } : {}), ...(readDraftTimebox() ? { timeboxMin: readDraftTimebox()! } : {}), ...(continuesFrom ? { continuesFrom } : {}) },
 		fetchLike,
 		settingsIdentity,
 	);
@@ -264,6 +266,16 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 		textRef.current = v;
 		setText(v);
 	};
+	// A closed sitting's Continue (math-mode.tsx): the hand-off arrives as
+	// this draft's text, and any send from this visit links the new session.
+	const continuesFromRef = useRef<string | undefined>(undefined);
+	useEffect(() => {
+		if (mode !== "teach") return;
+		const draft = takeContinueDraft();
+		if (!draft) return;
+		continuesFromRef.current = draft.continuesFrom;
+		applyText(draft.text);
+	}, [mode]);
 	const [busy, setBusy] = useState(false);
 	const startingRef = useRef(false);
 	const starterRef = useRef(new SessionStarter());
@@ -329,7 +341,7 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 		setBusy(true);
 		setStartError(false);
 		void startDraftSession(draft, fetch, mode === "teach" ? undefined : mode, mode === "practice" ? picksRef.current : undefined,
-			starterRef.current, JSON.stringify(catalog?.slots.strong))
+			starterRef.current, JSON.stringify(catalog?.slots.strong), mode === "teach" ? continuesFromRef.current : undefined)
 			.then((target) => {
 				if (target) router.push(target);
 				else { startingRef.current = false; setBusy(false); }

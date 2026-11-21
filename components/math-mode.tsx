@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckIcon, ChevronDownIcon, PauseIcon, PlayIcon, RepeatIcon, SigmaIcon, TargetIcon, TimerIcon, Undo2Icon } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { SessionStarter } from "@/components/start-session";
 import type { PlanNode, PlanTree, SessionGoal, TeachingProfile, TimeboxState } from "@/src/core";
 import { evidenceFromMessages, isTimeboxOption, sessionClock, TIMEBOX_EXTEND_MIN, MATH_STATUS_LABELS, nodeStatus, prerequisiteChain, TIMEBOX_OPTIONS } from "@/src/core";
 import { cn } from "@/lib/utils";
@@ -58,6 +57,31 @@ const DRAFT_CONSOLIDATE_KEY = "lh.draft-consolidate";
 export function readDraftTimebox(): number | null {
 	try { const n = Number(window.localStorage.getItem(DRAFT_TIMEBOX_KEY)); return isTimeboxOption(n) ? n : null; }
 	catch { return null; }
+}
+
+// ─── Continue in a new session (owner, 2026-11-21) ──────────────────────────
+// The closed sitting's Continue opens the new-session draft with the hand-off
+// typed in, instead of creating and sending at once, so settings can change
+// first. The draft takes the stash once on mount; any send from that draft
+// keeps the continuesFrom link, and leaving it drops the link.
+const CONTINUE_DRAFT_KEY = "lh.continue-draft";
+
+export interface ContinueDraft { text: string; continuesFrom: string }
+
+export function stashContinueDraft(draft: ContinueDraft): boolean {
+	try { globalThis.sessionStorage.setItem(CONTINUE_DRAFT_KEY, JSON.stringify(draft)); return true; }
+	catch { return false; }
+}
+
+/** Read and clear the stash: one draft screen visit takes it. */
+export function takeContinueDraft(): ContinueDraft | null {
+	try {
+		const raw = globalThis.sessionStorage.getItem(CONTINUE_DRAFT_KEY);
+		globalThis.sessionStorage.removeItem(CONTINUE_DRAFT_KEY);
+		if (!raw) return null;
+		const parsed = JSON.parse(raw) as Partial<ContinueDraft>;
+		return typeof parsed.text === "string" && typeof parsed.continuesFrom === "string" ? { text: parsed.text, continuesFrom: parsed.continuesFrom } : null;
+	} catch { return null; }
 }
 
 function writeDraftTimebox(min: number | null): void {
@@ -230,24 +254,20 @@ export function ClosedSittingCard({ chatId, title, state, profile }: {
 	profile: TeachingProfile | null;
 }) {
 	const router = useRouter();
-	const [starting, setStarting] = useState(false);
 	const [error, setError] = useState(false);
 	const goals = state.goals ?? [];
 	const carry = goals.filter((g) => g.status !== "met").map((g) => `- ${g.text} (${g.status})`).join("\n");
 	const prompt = `Continue from "${title}".\n\nHand-off from that sitting:\n${state.handoff ?? ""}` +
 		(carry ? `\n\nGoals not yet met:\n${carry}` : "") +
 		"\n\nProbe briefly from this hand-off, then set this sitting's goals.";
-	const start = async () => {
-		setStarting(true); setError(false);
-		try {
-			const path = await new SessionStarter().start({
-				title: prompt,
-				...(profile === "math" ? { profile: "math" as const } : {}),
-				...(state.timeboxMin ? { timeboxMin: state.timeboxMin } : {}),
-				continuesFrom: chatId,
-			}, fetch);
-			router.push(path);
-		} catch { setError(true); setStarting(false); }
+	// Open the draft prefilled, with the draft toggles preset from this
+	// sitting (still changeable there); nothing is created until send.
+	const start = () => {
+		setError(false);
+		if (!stashContinueDraft({ text: prompt, continuesFrom: chatId })) { setError(true); return; }
+		writeDraftMathMode(profile === "math");
+		writeDraftTimebox(state.timeboxMin && isTimeboxOption(state.timeboxMin) ? state.timeboxMin : null);
+		router.push("/chat/new");
 	};
 	return (
 		<div data-testid="closed-sitting" className="pointer-events-auto mb-4 rounded-2xl border bg-card p-4 shadow-lg">
@@ -257,11 +277,11 @@ export function ClosedSittingCard({ chatId, title, state, profile }: {
 					{goals.map((g) => <li key={g.id}>{GOAL_MARK[g.status]} {g.text}</li>)}
 				</ul>
 			)}
-			<button type="button" data-testid="continue-sitting" disabled={starting} onClick={() => void start()}
+			<button type="button" data-testid="continue-sitting" onClick={start}
 				className="mt-3 rounded-full bg-primary px-3 py-1 text-sm font-medium text-primary-foreground disabled:opacity-50">
 				Continue in a new session
 			</button>
-			{error && <p role="alert" className="mt-2 text-sm text-destructive">Could not start the new session. Try again.</p>}
+			{error && <p role="alert" className="mt-2 text-sm text-destructive">Could not open the new session draft. Try again.</p>}
 		</div>
 	);
 }
