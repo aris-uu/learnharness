@@ -1,6 +1,6 @@
 import { chainsForSelection, formatChainLine, isTimeboxOption } from "@/src/core";
 import { newGraphContextMessage, type GraphContextPick } from "@/src/core";
-import { compactionInFlight, createChat, isTurnRunning, listChats, nextReviewTitle, readSettingsRecord, stores, titleFromPrompt } from "@/src/server";
+import { compactionInFlight, continueCourse, createChat, isTurnRunning, listChats, nextReviewTitle, readSettingsRecord, stores, titleFromPrompt } from "@/src/server";
 import type { ChatListItem } from "@/src/core";
 
 /** The session picker's list: record-derived summaries (phase, pending
@@ -20,7 +20,7 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-	const body = (await req.json().catch(() => ({}))) as { title?: unknown; kind?: unknown; graphContext?: unknown; profile?: unknown; timeboxMin?: unknown; consolidate?: unknown; continuesFrom?: unknown };
+	const body = (await req.json().catch(() => ({}))) as { title?: unknown; kind?: unknown; graphContext?: unknown; profile?: unknown; timeboxMin?: unknown; consolidate?: unknown; continuesFrom?: unknown; courseId?: unknown };
 	const title = typeof body.title === "string" ? body.title : "";
 	// Practice sessions (owner, 2026-10-04): kind "practice" marks the
 	// record — the practice agent + its tools from turn 1, no extraction.
@@ -50,6 +50,13 @@ export async function POST(req: Request) {
 	// Time-boxed sittings and consolidation (2026-11-20): stamped at birth.
 	if (kind !== "practice" && isTimeboxOption(body.timeboxMin)) {
 		stores.chatStore.saveSettings(chat.id, { ...stores.chatStore.getChat(chat.id)?.settings, timeboxMin: body.timeboxMin });
+	}
+	// Courses (docs/course-plans-plan.md §5): "Start next sitting" from a
+	// course page names the course; it continues from its latest sitting.
+	if (typeof body.continuesFrom !== "string" && typeof body.courseId === "string") {
+		const course = stores.courseStore.get(body.courseId);
+		const last = course?.sittings.at(-1)?.chatId;
+		if (last) body.continuesFrom = last;
 	}
 	if (typeof body.continuesFrom === "string" && stores.chatStore.getChat(body.continuesFrom)) {
 		const current = stores.chatStore.getChat(chat.id)?.settings;
@@ -85,5 +92,12 @@ export async function POST(req: Request) {
 		);
 		stores.chatStore.saveMessages(chat.id, [newGraphContextMessage(picks, chainLines)]);
 	}
-	return Response.json({ id: chat.id, title: chat.title });
+	// The new chat joins the earlier sitting's course (created on demand):
+	// the course map, sources and digest reach it through the seed.
+	let courseId: string | undefined;
+	if (kind === undefined && typeof body.continuesFrom === "string" && stores.chatStore.getChat(body.continuesFrom)) {
+		try { courseId = continueCourse(chat.id, body.continuesFrom)?.id; }
+		catch (error) { console.error(`[course] continue failed for ${chat.id}:`, error); }
+	}
+	return Response.json({ id: chat.id, title: chat.title, ...(courseId ? { courseId } : {}) });
 }

@@ -256,10 +256,10 @@ export function ClosedSittingCard({ chatId, title, state, profile }: {
 	const router = useRouter();
 	const [error, setError] = useState(false);
 	const goals = state.goals ?? [];
-	const carry = goals.filter((g) => g.status !== "met").map((g) => `- ${g.text} (${g.status})`).join("\n");
-	const prompt = `Continue from "${title}".\n\nHand-off from that sitting:\n${state.handoff ?? ""}` +
-		(carry ? `\n\nGoals not yet met:\n${carry}` : "") +
-		"\n\nProbe briefly from this hand-off, then set this sitting's goals.";
+	// The course seed (server side, docs/course-plans-plan.md §5) carries the
+	// sources, the full map, the hand-offs and the carried-over goals, so the
+	// prompt only names the sitting; the learner can add what today is for.
+	const prompt = `Next sitting of "${title}".`;
 	// Open the draft prefilled, with the draft toggles preset from this
 	// sitting (still changeable there); nothing is created until send.
 	const start = () => {
@@ -279,7 +279,7 @@ export function ClosedSittingCard({ chatId, title, state, profile }: {
 			)}
 			<button type="button" data-testid="continue-sitting" onClick={start}
 				className="mt-3 rounded-full bg-primary px-3 py-1 text-sm font-medium text-primary-foreground disabled:opacity-50">
-				Continue in a new session
+				Start the next sitting
 			</button>
 			{error && <p role="alert" className="mt-2 text-sm text-destructive">Could not open the new session draft. Try again.</p>}
 		</div>

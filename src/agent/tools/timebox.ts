@@ -11,9 +11,19 @@ import type { ChatStore } from "../../core/ports.ts";
 import { evidenceFromMessages } from "../../core/math-evidence.ts";
 import type { SessionGoal } from "../../core/session-clock.ts";
 import type { ReviewStore } from "../../core/memory/review.ts";
+import { budgetNodeLimit } from "../../core/session-clock.ts";
+import { evidenceFromMessages as sessionEvidence, nodeStatus, type EvidenceStore } from "../../core/math-evidence.ts";
+import { COURSE_DIGEST_MAX_CHARS, type CourseStore } from "../../core/course.ts";
+import { courseFacts, courseOfChat, ensureCourseForChat, saveDigest, syncSitting, type CoursePorts } from "../../core/course-ops.ts";
 
 export const SET_GOALS_TOOL = "set_goals";
 export const CLOSE_SESSION_TOOL = "close_session";
+export const RECORD_DIGEST_TOOL = "record_digest";
+
+const recordDigestInput = Type.Object({
+	digest: Type.String({ minLength: 40, maxLength: COURSE_DIGEST_MAX_CHARS, description: "Markdown transcription of the course's sources: the syllabus outline, or every problem with its number and full statement, plus what the learner said about the context (exam date, what is weighted). Later sittings get this instead of the attachments." }),
+	learnerAgreed: Type.Optional(Type.Boolean({ description: "Required to replace an existing digest: the learner agreed." })),
+});
 
 const setGoalsInput = Type.Object({
 	goals: Type.Array(Type.Object({
@@ -35,8 +45,9 @@ const closeInput = Type.Object({
 
 const CREDITED = new Set(["correct", "correct_slow"]);
 
-export function timeboxTools(ctx: { chatId: string; chatStore: ChatStore; reviewStore?: ReviewStore }): Record<string, AgentTool<any>> {
+export function timeboxTools(ctx: { chatId: string; chatStore: ChatStore; reviewStore?: ReviewStore; courseStore?: CourseStore; evidenceStore?: EvidenceStore }): Record<string, AgentTool<any>> {
 	const record = () => ctx.chatStore.getChat(ctx.chatId);
+	const ports = () => ctx.courseStore ? { chatStore: ctx.chatStore, courseStore: ctx.courseStore, ...(ctx.evidenceStore ? { evidenceStore: ctx.evidenceStore } : {}), ...(ctx.reviewStore ? { reviews: () => ctx.reviewStore!.list() } : {}) } : null;
 	return {
 		[SET_GOALS_TOOL]: {
 			name: SET_GOALS_TOOL,
@@ -89,8 +100,31 @@ export function timeboxTools(ctx: { chatId: string; chatStore: ChatStore; review
 				const closedGoals = goals.map((g) => ({ ...g, status: byId.get(g.id) ?? g.status }));
 				const closedAt = new Date().toISOString();
 				ctx.chatStore.saveSettings(ctx.chatId, { ...chat.settings, timebox: { ...state, goals: closedGoals, handoff, closedAt } });
+				// The course keeps the sitting's verdicts and hand-off (course-plans-plan.md §4).
+				const p = ports();
+				if (p) { try { syncSitting(p, ctx.chatId); } catch (error) { console.error(`[course] sitting sync failed for ${ctx.chatId}:`, error); } }
 				return { text: JSON.stringify({ ok: true, closedAt, goals: closedGoals.map((g) => `${g.id}: ${g.status}`) }), details: { ok: true, goals: closedGoals, handoff, closedAt } };
 			}),
 		},
+		...(ctx.courseStore ? { [RECORD_DIGEST_TOOL]: recordDigestTool(ctx.chatId, ports) } : {}),
+	};
+}
+
+/** record_digest (course-plans-plan.md §4): the course's sources, transcribed once. */
+export function recordDigestTool(chatId: string, ports: () => CoursePorts | null): AgentTool<any> {
+	return {
+		name: RECORD_DIGEST_TOOL,
+		label: RECORD_DIGEST_TOOL,
+		description: "Write this course's digest once, after reading its sources and attachments: the syllabus outline, or every problem with its number and statement, plus the learner's context. Later sittings receive the digest instead of the attachments. Replacing an existing digest needs the learner's agreement (learnerAgreed).",
+		parameters: recordDigestInput,
+		execute: serverExecute(RECORD_DIGEST_TOOL, recordDigestInput, async ({ digest, learnerAgreed }) => {
+			const p = ports();
+			if (!p) return { ok: false, error: "Courses are not available here." };
+			const course = courseOfChat(p, chatId) ?? ensureCourseForChat(p, chatId);
+			if (!course) return { ok: false, error: `Chat not found: ${chatId}` };
+			if (course.digest && !learnerAgreed) return { ok: false, error: "This course already has a digest. Replace it only after the learner agrees, then pass learnerAgreed: true." };
+			saveDigest(p, course, digest.trim());
+			return { text: JSON.stringify({ ok: true, courseId: course.id, chars: digest.trim().length }), details: { ok: true, courseId: course.id } };
+		}),
 	};
 }

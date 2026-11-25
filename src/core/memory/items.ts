@@ -9,6 +9,7 @@
  */
 import { MATH_DIMENSIONS, nodeStatus, type EvidenceRecord, type MathDimension, type MathNodeStatus } from "../math-evidence.ts";
 import { daysTo90, dueAt, rateFsrs, retrievabilityAt, type FsrsRating, type FsrsState, type FsrsWeights, type TrainingReview } from "./fsrs.ts";
+import { IDENTITY_ITEM_KEYS, type ItemKeyResolver } from "../course.ts";
 
 /** Recall probability the schedule aims to keep each item above. Lower
  *  than flashcards' 0.90: a fresh tutor-made question is harder than a
@@ -24,8 +25,16 @@ export const memoryStage = (item: { state?: FsrsState | null; daysTo90?: number 
 	// A snapshot already carries daysTo90, read with the weights it was built with.
 	item.state && (typeof item.daysTo90 === "number" ? item.daysTo90 : daysTo90(item.state, weights)) >= MATURE_STABILITY_DAYS ? "mature" : "learning";
 
-/** Plan node ids are per-chat slugs, so an item is keyed by both. */
+/** Plan node ids are per-chat slugs, so an item is keyed by both. Inside a
+ *  course the item is the course node's (docs/course-plans-plan.md §3): use
+ *  itemKeys().key for anything that must agree with memoryItems. */
 export const memoryItemId = (chatId: string, nodeId: string) => `${chatId}#${nodeId}`;
+
+/** Which item a (chat, node) pair counts toward: identity unless the
+ *  composition root supplies the course resolver (server/stores.ts). */
+let itemKeysProvider: () => ItemKeyResolver = () => IDENTITY_ITEM_KEYS;
+export function configureItemKeys(provider: () => ItemKeyResolver): void { itemKeysProvider = provider; }
+export const itemKeys = (): ItemKeyResolver => itemKeysProvider();
 
 /** One scheduling event. Seeds are derived from evidence; reviews come from
  *  review sessions (phase 2). Only seed and review move the schedule. */
@@ -64,7 +73,10 @@ export type MemoryItemStatus =
 
 export interface MemoryItem {
 	id: string;
+	/** The chat of the item's latest evidence (a course item spans several). */
 	chatId: string;
+	/** The course the item belongs to, if any; nodeId is then the course node id. */
+	courseId?: string;
 	nodeId: string;
 	title: string;
 	summary?: string;
@@ -143,22 +155,31 @@ export function replay(events: readonly MemoryEvent[], weights?: FsrsWeights): F
 }
 
 /** Every memory item the evidence implies, with `reviews` (phase 2) replayed on top. */
-export function memoryItems(records: readonly EvidenceRecord[], reviews: readonly MemoryEvent[] = [], weights?: FsrsWeights): MemoryItem[] {
+export function memoryItems(records: readonly EvidenceRecord[], reviews: readonly MemoryEvent[] = [], weights?: FsrsWeights, keys: ItemKeyResolver = itemKeys()): MemoryItem[] {
 	const groups = new Map<string, EvidenceRecord[]>();
+	const keyOf = new Map<string, ReturnType<ItemKeyResolver["key"]>>();
 	for (const record of records) {
-		const id = memoryItemId(record.chatId, record.nodeId);
+		const key = keys.key(record.chatId, record.nodeId);
+		const id = key.id;
+		keyOf.set(id, key);
 		const list = groups.get(id) ?? [];
 		list.push(record);
 		groups.set(id, list);
 	}
+	// Merged items (course aliases) read their stored review histories together, in time order.
 	const reviewsBy = new Map<string, MemoryEvent[]>();
-	for (const review of reviews) {
-		const list = reviewsBy.get(review.itemId) ?? [];
+	for (const stored of reviews) {
+		const itemId = keys.itemId(stored.itemId);
+		const review = itemId === stored.itemId ? stored : { ...stored, itemId };
+		const list = reviewsBy.get(itemId) ?? [];
 		list.push(review);
-		reviewsBy.set(review.itemId, list);
+		reviewsBy.set(itemId, list);
 	}
 	const items: MemoryItem[] = [];
-	for (const [id, list] of groups) {
+	for (const [id, rawList] of groups) {
+		const key = keyOf.get(id)!;
+		// Within a course the records of several chats are one node: nodeStatus keys on nodeId.
+		const list = key.courseId ? rawList.map((r) => (r.nodeId === key.nodeId ? r : { ...r, nodeId: key.nodeId })).sort((a, b) => Date.parse(a.recordedAt) - Date.parse(b.recordedAt)) : rawList;
 		const seed = seedFor(list);
 		if (!seed) continue;
 		const latest = list.at(-1)!;
@@ -171,7 +192,8 @@ export function memoryItems(records: readonly EvidenceRecord[], reviews: readonl
 		items.push({
 			id,
 			chatId: latest.chatId,
-			nodeId: latest.nodeId,
+			...(key.courseId ? { courseId: key.courseId } : {}),
+			nodeId: key.nodeId,
 			title: named.nodeTitle,
 			...(named.nodeSummary ? { summary: named.nodeSummary } : {}),
 			// A review on an unverified item gives it a schedule.
@@ -206,8 +228,8 @@ export function snapshotItem(item: MemoryItem, nowMs: number, retention = DEFAUL
 }
 
 /** All items read at `nowMs`, most forgotten first. */
-export function memorySnapshot(records: readonly EvidenceRecord[], nowMs: number, options: { reviews?: readonly MemoryEvent[]; retention?: number; weights?: FsrsWeights } = {}): MemoryItemSnapshot[] {
-	return memoryItems(records, options.reviews, options.weights)
+export function memorySnapshot(records: readonly EvidenceRecord[], nowMs: number, options: { reviews?: readonly MemoryEvent[]; retention?: number; weights?: FsrsWeights; keys?: ItemKeyResolver } = {}): MemoryItemSnapshot[] {
+	return memoryItems(records, options.reviews, options.weights, options.keys)
 		.map((item) => snapshotItem(item, nowMs, options.retention, options.weights))
 		.sort((a, b) => a.retrievability - b.retrievability || a.title.localeCompare(b.title));
 }

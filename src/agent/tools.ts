@@ -1,5 +1,7 @@
 import { Type } from "typebox";
-import { timeboxTools } from "./tools/timebox.ts";
+import { recordDigestTool, RECORD_DIGEST_TOOL, timeboxTools } from "./tools/timebox.ts";
+import type { CourseStore } from "../core/course.ts";
+import { courseOfChat } from "../core/course-ops.ts";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { invalidInputResult, questionResult, serverExecute } from "./tool-execute.ts";
 import {
@@ -288,6 +290,8 @@ export interface ProberToolContext extends ProbeDoneContext {
 	reviewStore?: ReviewStore;
 	/** Fitted FSRS weights for search_evidence's recall (absent: defaults). */
 	weightsStore?: FsrsWeightsStore;
+	/** Courses: present = record_digest when this chat is a course sitting. */
+	courseStore?: CourseStore;
 }
 
 /** search_evidence for math mode, when the composition root wired the ledger. */
@@ -314,6 +318,10 @@ export function createProberTools(
 	// probe_done is re-added AFTER the filter, always-on by construction — it
 	// is how the phase ENDS; a prober that can never conclude is a lockout.
 	const done = probeDoneTool(ctx);
+	// A course sitting's prober may transcribe the sources (course-plans-plan.md §4).
+	const digest: Record<string, AgentTool<any>> = ctx.courseStore && courseOfChat({ chatStore: ctx.chatStore, courseStore: ctx.courseStore }, ctx.chatId)
+		? { [RECORD_DIGEST_TOOL]: recordDigestTool(ctx.chatId, () => ({ chatStore: ctx.chatStore, courseStore: ctx.courseStore! })) }
+		: {};
 	// The job tools build over the SAME context/gates as the teacher's
 	// (one builder, one gating semantic); the prober carries a SUBSET:
 	const jobs = jobTools({
@@ -366,6 +374,7 @@ export function createProberTools(
 					: {}),
 				...evidenceSearch(ctx, profile),
 				...done,
+				...digest,
 			},
 				withoutMechanics(enabled),
 			),
@@ -526,7 +535,7 @@ export function createReviewerTools(ctx: ReviewToolContext, enabled?: EnabledToo
 				[review.recordReview.name]: review.recordReview,
 				[search.name]: search,
 				// A time-boxed review or consolidation sitting ends with close_session too.
-				...(ctx.chatStore.getChat(ctx.chatId)?.settings?.timeboxMin ? { close_session: timeboxTools(ctx).close_session! } : {}),
+				...(ctx.chatStore.getChat(ctx.chatId)?.settings?.timeboxMin ? { close_session: timeboxTools({ ...ctx, evidenceStore: ctx.evidenceStore }).close_session! } : {}),
 			},
 			withoutMechanics(enabled),
 		),

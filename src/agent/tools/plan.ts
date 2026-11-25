@@ -7,6 +7,9 @@ import { createTree, PlanTreeError } from "../../core/plan-tree.ts";
 import { parseMermaidPlan } from "./mermaid-plan.ts";
 import { evidenceFromMessages, nodeStatus } from "../../core/math-evidence.ts";
 import { budgetNodeLimit } from "../../core/session-clock.ts";
+import { COURSE_MAP_SOFT_LIMIT, droppedEvidencedNodes, type CourseStore } from "../../core/course.ts";
+import { ensureCourseForChat, evidencedCourseNodes, saveCourseMap, courseOfChat } from "../../core/course-ops.ts";
+import type { EvidenceStore } from "../../core/math-evidence.ts";
 
 /** The binding-id reminder riding plan_init's slim content (owner,
  *  2026-10-09): plan_init is the exact moment the node ids become
@@ -21,6 +24,11 @@ export interface PlanToolContext {
 	chatId: string;
 	/** The storage port plan tools persist through. */
 	chatStore: ChatStore;
+	/** Courses (docs/course-plans-plan.md): present = a time-boxed teach
+	 *  session's map is its course's map. Absent in bare tests. */
+	courseStore?: CourseStore;
+	/** The evidence ledger, for which course nodes are memory keys. */
+	evidenceStore?: EvidenceStore;
 }
 
 /**
@@ -92,6 +100,19 @@ export function mathPlanWarnings(nodeCount: number, earlierMaps: number): string
 	return warnings;
 }
 
+/** A course map's guard (course-plans-plan.md §4): the map is not cut to the
+ *  sitting; it only warns when it grows past one course's worth. */
+export function courseMapWarnings(nodeCount: number, earlierMaps: number): string[] {
+	const warnings: string[] = [];
+	if (nodeCount > COURSE_MAP_SOFT_LIMIT) {
+		warnings.push(`This course map has ${nodeCount} nodes. Past about ${COURSE_MAP_SOFT_LIMIT}, ask the learner whether this is two courses.`);
+	}
+	if (earlierMaps >= MATH_PLAN_REWRITE_SOFT_LIMIT) {
+		warnings.push(`This is map number ${earlierMaps + 1} for this sitting. Prefer inserting the one missing prerequisite, and keep every existing node id.`);
+	}
+	return warnings;
+}
+
 /** A time-boxed sitting's scope guard: only NEW nodes count (not ones already solid or assumed here). */
 export function budgetPlanWarnings(nodeIds: readonly string[], messages: readonly unknown[], budgetMin: number, math: boolean, earlierMaps: number): string[] {
 	const evidence = evidenceFromMessages(messages);
@@ -109,6 +130,11 @@ export function budgetPlanWarnings(nodeIds: readonly string[], messages: readonl
 }
 
 export function planTools(ctx: PlanToolContext, options: { mathMode?: boolean } = {}): Record<string, AgentTool<any>> {
+	const chat = ctx.courseStore ? ctx.chatStore.getChat(ctx.chatId) : null;
+	const inCourse = !!chat && (!!chat.settings?.courseId || (!!chat.settings?.timeboxMin && (chat.kind ?? "teach") === "teach"));
+	const size = inCourse
+		? "This session is a sitting of a COURSE: the map is the whole course's map, as many nodes as the learner's material needs (the full syllabus or problem set), one reasoning step per node. Keep every existing node id; the sitting's goals (set_goals) are the slice that fits the time. "
+		: "5–15 nodes: a map, not a syllabus — one reasoning step per node, compress. ";
 	return {
 		plan_init: {
 			name: "plan_init",
@@ -117,7 +143,7 @@ export function planTools(ctx: PlanToolContext, options: { mathMode?: boolean } 
 				"Write or REWRITE this session's plan map — the dependency graph the learner follows live in the plan window. " +
 				"Call once right after the probe concludes, to present the map; re-call whenever the map is wrong (the new block replaces the old tree). " +
 				"A mermaid graph block (any direction): one node per line (`slug[Short Title]` — slugs are permanent lowercase ids: a-z, 0-9, hyphens/underscores), " +
-				"`-->` edges meaning 'from must be understood before to' (chains fine). 5–15 nodes: a map, not a syllabus — one reasoning step per node, compress. " +
+				"`-->` edges meaning 'from must be understood before to' (chains fine). " + size +
 				"Every check you fire names the node it assesses via `nodeId`; where the lesson stands derives from those tags.",
 			parameters: planInitInput,
 			execute: serverExecute("plan_init", planInitInput, async ({ mermaid }) => {
@@ -137,10 +163,25 @@ export function planTools(ctx: PlanToolContext, options: { mathMode?: boolean } 
 					// edge endpoints, self-loops, cycles → PlanTreeError).
 					const next = createTree(parsed.plan.nodes, parsed.plan.edges);
 					const budget = record.settings?.timeboxMin;
-					const warnings = budget
-						? budgetPlanWarnings(next.nodes.map((n) => n.id), record.messages, budget + (record.settings?.timebox?.extendedMin ?? 0), options.mathMode === true, successfulPlanInits(record.messages))
-						: options.mathMode ? mathPlanWarnings(next.nodes.length, successfulPlanInits(record.messages)) : [];
+					// THE MAP IS THE COURSE'S (course-plans-plan.md §4): a time-boxed
+					// teach session's map is its course's full map; the budget
+					// limits the goals (set_goals), not the map.
+					const ports = ctx.courseStore ? { chatStore, courseStore: ctx.courseStore, ...(ctx.evidenceStore ? { evidenceStore: ctx.evidenceStore } : {}) } : null;
+					const courseSitting = !!ports && (!!budget && (record.kind ?? "teach") === "teach" || !!record.settings?.courseId);
+					const course = ports && courseSitting ? courseOfChat(ports, chatId) ?? ensureCourseForChat(ports, chatId) : null;
+					if (ports && course) {
+						const dropped = droppedEvidencedNodes(course, next, evidencedCourseNodes(ports, course));
+						if (dropped.length) {
+							return { ok: false, error: `The course map must keep every node that has evidence (they are memory keys): ${dropped.join(", ")}. Add them back; you may add new nodes and edges.` };
+						}
+					}
+					const warnings = course
+						? courseMapWarnings(next.nodes.length, successfulPlanInits(record.messages))
+						: budget
+							? budgetPlanWarnings(next.nodes.map((n) => n.id), record.messages, budget + (record.settings?.timebox?.extendedMin ?? 0), options.mathMode === true, successfulPlanInits(record.messages))
+							: options.mathMode ? mathPlanWarnings(next.nodes.length, successfulPlanInits(record.messages)) : [];
 					chatStore.saveTree(chatId, next);
+					if (ports && course) saveCourseMap(ports, course, next, chatId);
 					// Context diet: content = the validated nodeIds + the reminder (the
 				// ids just became binding for every quiz/explain call); details =
 					// the full tree for the record/UI — the plan popup's latestTree

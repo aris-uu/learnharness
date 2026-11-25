@@ -21,7 +21,7 @@ import {
 	type MathEvidence,
 } from "../../core/math-evidence.ts";
 import type { LhMessage } from "../../core/native-messages.ts";
-import { DEFAULT_DESIRED_RETENTION, memoryItemId, memorySnapshot } from "../../core/memory/items.ts";
+import { DEFAULT_DESIRED_RETENTION, itemKeys, memorySnapshot } from "../../core/memory/items.ts";
 import type { ReviewStore } from "../../core/memory/review.ts";
 import type { FsrsWeightsStore } from "../../core/memory/fsrs.ts";
 import { invalidInputResult } from "../tool-execute.ts";
@@ -96,7 +96,7 @@ export function searchEvidenceTool(ctx: MathToolContext & { evidenceStore: Evide
 				note: record.note,
 				...(record.habits ? { habits: record.habits } : {}),
 				recordedAt: record.recordedAt,
-				...memoryFields(memory.get(memoryItemId(record.chatId, record.nodeId))),
+				...memoryFields(memory.get(itemKeys().key(record.chatId, record.nodeId).id)),
 			}));
 			const details = { query: input.query, count: results.length, results };
 			return { content: [{ type: "text", text: JSON.stringify(details) }], details };

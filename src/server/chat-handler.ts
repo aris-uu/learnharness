@@ -35,6 +35,8 @@ import { fileAccessPolicy } from "./file-access.ts";
 import { collectToolCallIds } from "./pi/call-ids.ts";
 import { providerEventNote } from "../agent/provider-events.ts";
 import { effectiveSettings, stores } from "./stores.ts";
+import { seedForChat } from "../core/course-ops.ts";
+import { coursePorts } from "./courses.ts";
 import { getPluginAgentContributions, getPluginHost } from "./plugins.ts";
 import { mcpToolsForTurn } from "./mcp.ts";
 import { preparePluginQuestionSubmission, reconcilePluginQuestionCompatibility, type QuestionTypeResolver } from "./plugin-questions.ts";
@@ -738,6 +740,17 @@ export async function handleChatInput(
 			resumedHours: record.settings.timebox?.closedAt ? null : resumedAfterHours(record.messages, Date.now()),
 		} : {}),
 		...(record.kind === "review" && record.settings?.consolidate ? { consolidate: true } : {}),
+		// A course sitting starts from the whole course (docs/course-plans-plan.md §5).
+		...(() => {
+			if (record.kind === "practice" || record.kind === "review") return {};
+			try {
+				const course = seedForChat(coursePorts(), chatId);
+				return course ? { course } : {};
+			} catch (error) {
+				console.error(`[course] seed failed for ${chatId}:`, error);
+				return {};
+			}
+		})(),
 	};
 	// PRACTICE BRANCH (owner design, 2026-10-04): a kind:"practice"
 	// session builds the practitioner from turn 1 — no prober→teacher
@@ -748,7 +761,7 @@ export async function handleChatInput(
 		? buildAgent({ ...agentOpts, teaching })
 		: record.kind === "review"
 			? createReviewerAgent(
-					{ chatId, chatStore: stores.chatStore, evidenceStore: stores.evidenceStore, reviewStore: stores.reviewStore, weightsStore: stores.fsrsWeightsStore },
+					{ chatId, chatStore: stores.chatStore, evidenceStore: stores.evidenceStore, reviewStore: stores.reviewStore, weightsStore: stores.fsrsWeightsStore, courseStore: stores.courseStore },
 					agentOpts,
 				)
 		: record.kind === "practice"
@@ -788,6 +801,7 @@ export async function handleChatInput(
 						evidenceStore: stores.evidenceStore,
 						reviewStore: stores.reviewStore,
 						weightsStore: stores.fsrsWeightsStore,
+						courseStore: stores.courseStore,
 					},
 					agentOpts,
 				)
@@ -809,6 +823,7 @@ export async function handleChatInput(
 						evidenceStore: stores.evidenceStore,
 						reviewStore: stores.reviewStore,
 						weightsStore: stores.fsrsWeightsStore,
+						courseStore: stores.courseStore,
 					},
 					agentOpts,
 				);

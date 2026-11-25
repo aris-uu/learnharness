@@ -7,7 +7,8 @@
 import { MATH_DIMENSIONS, MATH_HABITS, type EvidenceRecord, type MathDimension, type MathHabit, type MathOutcome } from "../math-evidence.ts";
 import type { PlanEdge } from "../contracts/plan.ts";
 import type { FsrsRating } from "./fsrs.ts";
-import { memoryStage, type MemoryEvent, type MemoryItemSnapshot, type MemoryStage } from "./items.ts";
+import { itemKeys, memoryStage, type MemoryEvent, type MemoryItemSnapshot, type MemoryStage } from "./items.ts";
+import type { ItemKeyResolver } from "../course.ts";
 
 export const REVIEW_OUTCOMES = ["correct", "correct_slow", "partial", "incorrect"] as const satisfies readonly MathOutcome[];
 export type ReviewOutcome = (typeof REVIEW_OUTCOMES)[number];
@@ -151,27 +152,31 @@ export function reviewCandidates(input: {
 	snapshot: readonly MemoryItemSnapshot[];
 	records: readonly EvidenceRecord[];
 	reviews: readonly ReviewEvent[];
-	/** Each teaching session's plan edges, for prerequisites. */
+	/** Each teaching session's plan edges, for prerequisites (a course id gives the course map's). */
 	edgesOf: (chatId: string) => readonly PlanEdge[];
+	/** Which item a (chat, node) pair counts toward; defaults to the configured course resolver. */
+	keys?: ItemKeyResolver;
 	sessionTitle: (chatId: string) => string;
 	nowMs: number;
 	limit?: number;
 	/** Only items at this stage: review takes mature items, consolidation the rest. */
 	stage?: MemoryStage;
 }): ReviewCandidate[] {
+	const keys = input.keys ?? itemKeys();
 	const due = input.snapshot.filter((item) => item.due && (!input.stage || memoryStage(item) === input.stage));
 	const dueIds = new Set(due.map((item) => item.id));
 	const candidates = due.map((item): ReviewCandidate & { prereqOfDue: boolean; unverified: boolean } => {
-		const edges = input.edgesOf(item.chatId);
-		const ownReviews = input.reviews.filter((r) => r.itemId === item.id);
-		const evidence = input.records.filter((r) => r.chatId === item.chatId && r.nodeId === item.nodeId);
+		const owner = item.courseId ?? item.chatId;
+		const edges = input.edgesOf(owner);
+		const ownReviews = input.reviews.filter((r) => keys.itemId(r.itemId) === item.id);
+		const evidence = input.records.filter((r) => keys.key(r.chatId, r.nodeId).id === item.id);
 		const history = [
 			...ownReviews.map((r) => ({ at: r.at, dimension: r.dimension, outcome: r.outcome, question: r.question, note: r.note })),
 			...evidence.filter((r) => r.outcome !== "assumed" && r.outcome !== "learner_override").map((r) => ({ at: r.recordedAt, dimension: r.dimension, outcome: r.outcome, note: r.note })),
 		].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).slice(0, 3);
 		const habits = [...new Set([...evidence.flatMap((r) => r.habits ?? []), ...ownReviews.flatMap((r) => r.habits ?? [])])];
 		const lastReview = ownReviews.filter((r) => r.kind === "review").at(-1);
-		const sameChat = (nodeId: string) => `${item.chatId}#${nodeId}`;
+		const sameChat = (nodeId: string) => `${owner}#${nodeId}`;
 		return {
 			itemId: item.id,
 			title: item.title,

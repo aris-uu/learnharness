@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { MenuShell } from "@/components/menu-shell";
 import { DeleteFolderDialog, DeleteSessionDialog, folderDeleteCopy, type DeleteDialogCopy } from "@/components/delete-session-dialog";
 import type { ChatDeleteMode, ThemeMode } from "@/src/core";
-import { BrainIcon, DumbbellIcon, FolderPlusIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
+import { BookOpenIcon, BrainIcon, DumbbellIcon, FolderPlusIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
 import { CoverageMenuBlock } from "@/components/extraction-coverage";
 import { LhMark } from "@/components/lh-mark";
@@ -289,7 +289,8 @@ export function timeAgo(iso: string, now = new Date()): string {
  *  typography round 5): it informed no decision — clutter. messageCount
  *  still rides the API payload, so this is a one-line flip back if it's
  *  ever wanted. */
-function sessionMeta(chat: ChatListItem): string {
+function sessionMeta(chat: ChatListItem, course?: string): string {
+	if (course && !chat.compacting && !chat.pendingQuestion && !chat.busy) return `${course} · ${timeAgo(chat.updatedAt)}`;
 	if (chat.compacting) return `Compacting context · ${timeAgo(chat.updatedAt)}`;
 	if (chat.pendingQuestion) return `Waiting for input · ${timeAgo(chat.updatedAt)}`;
 	if ((chat.kind ?? "teach") === "practice" && chat.pendingProblem) {
@@ -312,9 +313,12 @@ export function SessionRow({
 	onContextMenu,
 	depth = 0,
 	compact = false,
+	course,
 }: {
 	chat: ChatListItem;
 	compact?: boolean;
+	/** The course this session is a sitting of (docs/course-plans-plan.md §7), shown in the meta line. */
+	course?: string;
 	active: boolean;
 	onOpen: () => void;
 	/** Folder depth in the sidebar tree (0 = unfiled). */
@@ -343,7 +347,7 @@ export function SessionRow({
 			<SessionStatus busy={chat.busy || chat.compacting} />
 			<span className="min-w-0 flex-1">
 				<span className={cn("block truncate", sidebarNameFont(compact))}>{chat.title}</span>
-				{!compact && <span className="block text-xs text-muted-foreground">{sessionMeta(chat)}</span>}
+				{!compact && <span className="block text-xs text-muted-foreground">{sessionMeta(chat, course)}</span>}
 			</span>
 			{/* The dumbbell rides the FAR RIGHT (owner round 6, 2026-10-05) —
 			    was left of the name; right-aligned keeps the titles flush with
@@ -421,6 +425,8 @@ function SessionsSidebar() {
 	const { due: memoryDue, split: memorySplit } = useMemoryDueSplit();
 	const { open, toggle } = useSidebar();
 	const [chats, setChats] = useState<ChatListItem[] | null>(null);
+	// Course titles by id (docs/course-plans-plan.md §7): the rows' meta names the course.
+	const [courseTitles, setCourseTitles] = useState<Record<string, string>>({});
 	const [query, setQuery] = useState("");
 	const [kindFilter, setKindFilter] = useState<SessionKindFilter>("all");
 	useEffect(() => {
@@ -490,6 +496,11 @@ function SessionsSidebar() {
 			const res = await fetch("/api/chats", { cache: "no-store" });
 			const d = (await res.json()) as { chats: ChatListItem[] };
 			setChats(d.chats);
+			if (d.chats.some((c) => c.settings?.courseId)) {
+				fetch("/api/courses", { cache: "no-store" }).then((r) => r.json())
+					.then((body: { courses?: Array<{ id: string; title: string }> }) => setCourseTitles(Object.fromEntries((body.courses ?? []).map((c) => [c.id, c.title]))))
+					.catch(() => {});
+			}
 		} catch {
 			// a transient failure keeps the last snapshot
 			setChats((prev) => prev ?? []);
@@ -779,6 +790,7 @@ function SessionsSidebar() {
 								router.push(`/chat/${c.id}`);
 							}}
 							onContextMenu={(e) => openContext(e, c)}
+							course={c.settings?.courseId ? courseTitles[c.settings.courseId] : undefined}
 						/>
 					)}
 				</SourceDragRow>
@@ -1066,6 +1078,16 @@ function SessionsSidebar() {
 								{memoryDue ? <span data-testid="memory-due-badge" title={memorySplit ? `${memorySplit.learning} to consolidate, ${memorySplit.mature} to review` : undefined} className="ml-0.5 rounded-sm bg-accent px-1 font-mono text-[10px] normal-case tracking-normal text-foreground">{memoryDue}</span> : null}
 							</Link>
 						</Hint>
+						<Hint label="Courses: whole maps across sittings" side="right">
+							<Link
+								href="/course"
+								data-testid="courses-entry"
+								className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+							>
+								<BookOpenIcon className="size-3" />
+								Courses
+							</Link>
+						</Hint>
 						<Hint label="Settings" action="open-settings" side="right">
 							<button
 								type="button"
@@ -1130,6 +1152,28 @@ function SessionsSidebar() {
 						>
 							Export as Markdown…
 						</button>
+						{(() => {
+							const target = chats?.find((c) => c.id === ctxChatId);
+							if (!target || target.kind === "practice") return null;
+							const courseId = target.settings?.courseId;
+							return (
+								<button
+									type="button"
+									data-testid="ctx-course"
+									onClick={async () => {
+										setCtxChatId(null);
+										if (courseId) { router.push(`/course/${courseId}`); return; }
+										// §9.1: adopt this session as a course (reconstructed hand-off if it was never closed).
+										const res = await fetch("/api/courses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "adopt", chatId: target.id }) });
+										const body = (await res.json().catch(() => ({}))) as { courseId?: string };
+										if (body.courseId) router.push(`/course/${body.courseId}`);
+									}}
+									className="flex items-center rounded-lg px-2.5 py-1.5 text-left text-foreground transition-colors hover:bg-accent"
+								>
+									{courseId ? "Open course" : "Make a course from this session"}
+								</button>
+							);
+						})()}
 						<button
 							type="button"
 							data-testid="ctx-delete"

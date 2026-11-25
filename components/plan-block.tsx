@@ -317,6 +317,7 @@ export function PlanDiagram({
 	naturalSize,
 	monochrome,
 	fill,
+	badgeOf,
 }: {
 	/** usePlanLayout's result for these same nodes + edges. */
 	layout: PlanLayout;
@@ -346,6 +347,8 @@ export function PlanDiagram({
 	 *  dock band's marginalia mode, where the diagram must fit BOTH the
 	 *  flank's width and the band's height rather than run width-first. */
 	fill?: boolean;
+	/** A short corner mark per node (the course view: ✓ done, ~ stale, ● this sitting). */
+	badgeOf?: (id: string) => string | undefined;
 }) {
 	// Pad only the full-extent render — the plan window's override viewBox is
 	// a deliberate viewport crop, and the popup keeps its own fit margins.
@@ -484,6 +487,19 @@ export function PlanDiagram({
 								filter={`url(#${markerId}-glow)`}
 							/>
 						)}
+						{badgeOf?.(n.id) && (
+							<text
+								x={w - 4}
+								y={layout.fontSize * 0.55}
+								textAnchor="end"
+								dominantBaseline="central"
+								fontSize={layout.fontSize * 0.7}
+								className="fill-muted-foreground"
+								data-testid={`plan-badge-${n.id}`}
+							>
+								{badgeOf(n.id)}
+							</text>
+						)}
 						{lines.map((line, i) => (
 							<text
 								key={i}
@@ -589,13 +605,56 @@ const POPUP_PAD = GLOW_REACH;
  * territory. Surface 80% + blur (owner decision): the transcript ghosts
  * through while the focus owns the session area.
  */
-export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessage[]; onClose: () => void }) {
-	const tree = useMemo(() => latestTree(messages), [messages]);
+/** The course view of a session (GET /api/chats/:id/course), or null. */
+export interface ChatCourseView {
+	course: { id: string; title: string; map: PlanTree; digest?: string };
+	nodes: Array<{ id: string; title: string; state: "done" | "stale" | "started" | "later"; habits: string[] }>;
+	progress: { done: number; total: number };
+	sittings: Array<{ chatId: string; title: string; startedAt: string; closedAt?: string; budgetMin?: number; kind?: string; handoff?: string; handoffSource?: "close" | "reconstructed"; goals: Array<{ id: string; text: string; nodeIds: string[]; status: string }> }>;
+}
+
+export function useChatCourse(chatId: string | undefined): ChatCourseView | null {
+	const [course, setCourse] = useState<ChatCourseView | null>(null);
+	useEffect(() => {
+		if (!chatId) return;
+		let live = true;
+		fetch(`/api/chats/${chatId}/course`)
+			.then((res) => (res.ok ? res.json() : null))
+			.then((body: { course?: ChatCourseView | null } | null) => { if (live) setCourse(body?.course ?? null); })
+			.catch(() => {});
+		return () => { live = false; };
+	}, [chatId]);
+	return course;
+}
+
+export function PlanPopup({ messages, onClose, chatId }: { messages: readonly PopupMessage[]; onClose: () => void; chatId?: string }) {
+	const sittingTree = useMemo(() => latestTree(messages), [messages]);
 	const statuses = useMemo(
-		() => (tree ? derivePlanStatuses(tree, messages as Parameters<typeof derivePlanStatuses>[1]) : null),
-		[tree, messages],
+		() => (sittingTree ? derivePlanStatuses(sittingTree, messages as Parameters<typeof derivePlanStatuses>[1]) : null),
+		[sittingTree, messages],
 	);
-	const statusOf = (id: string): PlanNodeStatus => (statuses ? derivedNodeStatus(statuses, id) : "upcoming");
+	// Courses (docs/course-plans-plan.md §7): the same popup shows the whole
+	// course map, each node marked done / stale / this sitting / later.
+	const course = useChatCourse(chatId);
+	const [scope, setScope] = useState<"sitting" | "course">("sitting");
+	const courseMode = scope === "course" && !!course;
+	const tree = courseMode ? course.course.map : sittingTree;
+	const courseState = useMemo(() => {
+		if (!course) return null;
+		const slice = new Set(course.sittings.find((s) => s.chatId === chatId)?.goals.flatMap((g) => g.nodeIds) ?? []);
+		return { slice, states: new Map(course.nodes.map((n) => [n.id, n.state])) };
+	}, [course, chatId]);
+	const statusOf = (id: string): PlanNodeStatus => {
+		if (courseMode && courseState) {
+			if (courseState.slice.has(id)) return "current";
+			const state = courseState.states.get(id);
+			return state === "done" || state === "stale" ? "visited" : "upcoming";
+		}
+		return statuses ? derivedNodeStatus(statuses, id) : "upcoming";
+	};
+	const badgeOf = courseMode && courseState
+		? (id: string) => ({ done: "✓", stale: "~", started: "…", later: undefined }[courseState.states.get(id) ?? "later"])
+		: undefined;
 
 	const rootRef = useRef<HTMLDivElement>(null);
 	const layer = useInteractionLayer({
@@ -727,8 +786,26 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 			}}
 		>
 			<div className="mb-2 flex items-center gap-2">
-				<span className="text-sm font-medium">The plan</span>
-				<span className="text-xs text-muted-foreground">live — statuses derive from your check outcomes</span>
+				<span className="text-sm font-medium">{courseMode ? course.course.title : "The plan"}</span>
+				{course ? (
+					<div className="flex items-center gap-1 text-xs" role="tablist" aria-label="Plan scope">
+						{(["sitting", "course"] as const).map((value) => (
+							<button key={value} type="button" role="tab" aria-selected={scope === value} data-testid={`plan-scope-${value}`}
+								onClick={() => setScope(value)}
+								className={cn("rounded-full border px-2 py-0.5", scope === value ? "border-primary text-primary" : "border-border/70 text-muted-foreground hover:text-foreground")}>
+								{value === "sitting" ? "This sitting" : `Course · ${course.progress.done}/${course.progress.total} done`}
+							</button>
+						))}
+						{courseMode && (
+							<>
+								<span className="ml-2 text-muted-foreground">✓ done · ~ stale · … started · highlighted = this sitting&apos;s goals</span>
+								<a href={`/course/${course.course.id}`} className="ml-2 text-muted-foreground underline hover:text-foreground">Course page</a>
+							</>
+						)}
+					</div>
+				) : (
+					<span className="text-xs text-muted-foreground">live — statuses derive from your check outcomes</span>
+				)}
 				<Hint label="Close" binding="escape" side="left">
 <button
 					type="button"
@@ -775,9 +852,10 @@ export function PlanPopup({ messages, onClose }: { messages: readonly PopupMessa
 								nodes={tree.nodes}
 								edges={tree.edges}
 								statusOf={statusOf}
-								glowId={statuses?.current ?? null}
+								glowId={courseMode ? null : (statuses?.current ?? null)}
 								markerId={markerId}
 								pad={POPUP_PAD}
+								badgeOf={badgeOf}
 								naturalSize
 							/>
 						</div>

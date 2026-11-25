@@ -15,6 +15,9 @@ import { themeStore } from "../store/themes.ts";
 import { evidenceStore } from "../store/evidence.ts";
 import { reviewStore } from "../store/memory.ts";
 import { fsrsWeightsStore } from "../store/fsrs-weights.ts";
+import { courseStore } from "../store/courses.ts";
+import { configureItemKeys } from "../core/memory/items.ts";
+import { courseItemKeys } from "../core/course.ts";
 import { resolveSettings, type EffectiveSettings } from "../core/settings-resolution.ts";
 import { syncCustomProvider } from "./custom-provider.ts";
 import { configureWorkerRequestAdmission } from "../agent/worker-request-admission.ts";
@@ -29,6 +32,7 @@ export const stores = {
 	evidenceStore,
 	reviewStore,
 	fsrsWeightsStore,
+	courseStore,
 };
 
 export type Stores = typeof stores;
@@ -47,6 +51,9 @@ export function effectiveSettings(): EffectiveSettings {
 
 // Runtime policy is supplied at the composition root, never imported by agents.
 configureWorkerRequestAdmission(() => effectiveSettings().agent.workerRequestConcurrency);
+
+// Memory items inside a course resolve onto course nodes (docs/course-plans-plan.md §3).
+configureItemKeys(() => courseItemKeys(courseStore.list()));
 
 // Boot: register the custom endpoint (when configured) into piModels(); the
 // POST /api/custom-provider route re-syncs after every connect.

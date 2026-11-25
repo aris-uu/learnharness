@@ -14,7 +14,8 @@ import type { LhMessage } from "../../core/native-messages.ts";
 import { createTree } from "../../core/plan-tree.ts";
 import type { PlanEdge, PlanTree } from "../../core/contracts/plan.ts";
 import { retrievabilityAt, type FsrsWeightsStore } from "../../core/memory/fsrs.ts";
-import { DEFAULT_DESIRED_RETENTION, memoryItems, memorySnapshot, trainingItems } from "../../core/memory/items.ts";
+import { DEFAULT_DESIRED_RETENTION, itemKeys, memoryItems, memorySnapshot, trainingItems } from "../../core/memory/items.ts";
+import { isCourseId, type CourseStore } from "../../core/course.ts";
 import { RATING_LABELS, ratingFor, REVIEW_CHECKS, REVIEW_OUTCOMES, MAX_FOLLOW_UPS, retryQueue, RETRY_GAP, reviewCandidates, reviewNodeIds, type ReviewEvent, type ReviewStore } from "../../core/memory/review.ts";
 import { invalidInputResult } from "../tool-execute.ts";
 import { minutesIntoSitting } from "../../core/session-clock.ts";
@@ -32,6 +33,8 @@ export type ReviewToolContext = Pick<PlanToolContext, "chatId" | "chatStore"> & 
 	reviewStore: ReviewStore;
 	/** Fitted FSRS weights (absent: defaults) and the refit after each graded review. */
 	weightsStore?: FsrsWeightsStore;
+	/** Courses, for a course item's prerequisite edges. */
+	courseStore?: CourseStore;
 	now?: () => number;
 };
 
@@ -90,7 +93,8 @@ export function reviewTools(ctx: ReviewToolContext) {
 	const record = () => ctx.chatStore.getChat(ctx.chatId);
 	const picks = () => thisRunPicks ?? pickedItems((record()?.messages ?? []) as LhMessage[]);
 	const titles = () => new Map(ctx.chatStore.listChats().map((chat) => [chat.id, chat.title]));
-	const edgesOf = (chatId: string): readonly PlanEdge[] => ctx.chatStore.getChat(chatId)?.tree?.edges ?? [];
+	// A course item's prerequisites come from the course map (docs/course-plans-plan.md §8).
+	const edgesOf = (owner: string): readonly PlanEdge[] => isCourseId(owner) ? ctx.courseStore?.get(owner)?.map.edges ?? [] : ctx.chatStore.getChat(owner)?.tree?.edges ?? [];
 	const candidatesNow = (limit?: number) => {
 		const records = ctx.evidenceStore.list();
 		const reviews = ctx.reviewStore.list();
@@ -147,8 +151,9 @@ export function reviewTools(ctx: ReviewToolContext) {
 			const edges: PlanEdge[] = [];
 			for (const itemId of ids) {
 				const item = byId.get(itemId)!;
-				for (const edge of edgesOf(item.chatId)) {
-					const from = slugOf.get(`${item.chatId}#${edge.from}`);
+				const owner = item.courseId ?? item.chatId;
+				for (const edge of edgesOf(owner)) {
+					const from = slugOf.get(`${owner}#${edge.from}`);
 					if (edge.to === item.nodeId && from) edges.push({ from, to: slugOf.get(itemId)! });
 				}
 			}
@@ -179,7 +184,7 @@ export function reviewTools(ctx: ReviewToolContext) {
 			}
 			const reviews = ctx.reviewStore.list();
 			const t = now();
-			const onItem = reviews.filter((e) => e.chatId === ctx.chatId && e.itemId === itemId);
+			const onItem = reviews.filter((e) => e.chatId === ctx.chatId && itemKeys().itemId(e.itemId) === itemId);
 			const ladder = onItem.filter((e) => e.kind === "review" || e.kind === "followup");
 			if (input.check) {
 				const problem = input.followUp

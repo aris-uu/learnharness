@@ -7,6 +7,7 @@ import { PATHS } from "../../config.ts";
 import { APP_IDENTITY, piEngineFor, type PiEngine } from "./models.ts";
 import { effectivePromptSegments, profileFragments } from "./prompt-segments.ts";
 import { timeboxDoctrine } from "../core/session-clock.ts";
+import { courseDoctrine } from "../core/course.ts";
 import { CONSOLIDATION_DOCTRINE } from "./consolidation.ts";
 import type { TeachingProfile } from "../core/contracts/chat.ts";
 import {
@@ -175,6 +176,10 @@ export interface AgentBuildOptions {
 	resumedHours?: number | null;
 	/** Review sessions: a consolidation sitting (items in learning, re-teaching). */
 	consolidate?: boolean;
+	/** A course sitting (docs/course-plans-plan.md §5): the course seed (sources,
+	 *  full map with statuses, sittings, last hand-off) and whether earlier
+	 *  sittings exist. Appended to the prober's and teacher's prompt. */
+	course?: { seed: string; continuation: boolean };
 	/** Native conversation identity: the existing persisted chat id, reused
 	 * across reconstructed prober, teacher, and practice Agents.
 	 * Debug: when set AND LH_PROVIDER_EVENTS=1, raw provider stream events
@@ -246,6 +251,7 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 		...(opts.timeboxMin && kind !== "practice"
 			? [timeboxDoctrine(opts.timeboxMin, kind === "reviewer" ? (opts.consolidate ? "consolidate" : "review") : "teach", opts.resumedHours ?? null)]
 			: []),
+		...(opts.course && (kind === "prober" || kind === "teacher") ? [courseDoctrine(opts.course.continuation), opts.course.seed] : []),
 	].join("\n\n---\n\n");
 	const builtinPrompt = narrationGuard ? `${sessionPrompt}\n\n---\n\n${SEND_TO_USER_DELIVERY_RULE}` : sessionPrompt;
 	// Bind native read and preserve the kind/model-aware Claude output gate

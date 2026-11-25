@@ -78,6 +78,8 @@ export interface ChatSettings {
 	/** Review sessions only: a consolidation sitting over items still in learning
 	 *  (stability under MATURE_STABILITY_DAYS) instead of a review of mature ones. */
 	consolidate?: boolean;
+	/** The course this chat is a sitting of (docs/course-plans-plan.md §3). */
+	courseId?: string;
 }
 
 export const TEACHING_PROFILES = ["math"] as const;
