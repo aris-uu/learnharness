@@ -9,7 +9,11 @@ import { evidenceFromMessages, nodeStatus } from "../../core/math-evidence.ts";
 import { budgetNodeLimit } from "../../core/session-clock.ts";
 import { COURSE_MAP_SOFT_LIMIT, droppedEvidencedNodes, type CourseStore } from "../../core/course.ts";
 import { ensureCourseForChat, evidencedCourseNodes, saveCourseMap, courseOfChat } from "../../core/course-ops.ts";
-import type { EvidenceStore } from "../../core/math-evidence.ts";
+import {
+	CONCEPT_KINDS, newConceptIdProblem, scopeProblems, similarConcepts, withEdges,
+	type Concept, type ConceptScopeInput, type MathStore,
+} from "../../core/math-concepts.ts";
+import { storeSnapshot } from "../../core/memory/items.ts";
 
 /** The binding-id reminder riding plan_init's slim content (owner,
  *  2026-10-09): plan_init is the exact moment the node ids become
@@ -27,8 +31,8 @@ export interface PlanToolContext {
 	/** Courses (docs/course-plans-plan.md): present = a time-boxed teach
 	 *  session's map is its course's map. Absent in bare tests. */
 	courseStore?: CourseStore;
-	/** The evidence ledger, for which course nodes are memory keys. */
-	evidenceStore?: EvidenceStore;
+	/** The global math record (concepts + attempts): present = math-mode node ids are global concepts. */
+	mathStore?: MathStore;
 }
 
 /**
@@ -59,7 +63,19 @@ export interface PlanToolContext {
  * tree for the record and the plan popup (latestTree reads it — the
  * agent-invisible channel, serializer-verified).
  */
+const conceptScopeInput = Type.Object({
+	id: Type.String({ description: "The node id (a NEW global concept id)." }),
+	kind: Type.Union(CONCEPT_KINDS.map((k) => Type.Literal(k))),
+	statement: Type.String({ description: "Exactly what is tested: the definition with every clause, the theorem with every hypothesis, or the technique's steps and when it applies." }),
+	checks: Type.Optional(Type.Object({ K: Type.Optional(Type.String()), U: Type.Optional(Type.String()), S: Type.Optional(Type.String()), P: Type.Optional(Type.String()) })),
+	summary: Type.Optional(Type.String()),
+});
+
 const planInitInput = Type.Object({
+	concepts: Type.Optional(Type.Array(conceptScopeInput, {
+		description: "Math mode: the scope of every NEW concept in the map (node ids are global concepts shared by all sessions; ids that already exist are reused and need no entry). " +
+			"One concept = one testable unit: one definition, theorem, technique, example family or fact.",
+	})),
 	mermaid: Type.String({
 		minLength: 1,
 		description:
@@ -113,10 +129,10 @@ export function courseMapWarnings(nodeCount: number, earlierMaps: number): strin
 	return warnings;
 }
 
-/** A time-boxed sitting's scope guard: only NEW nodes count (not ones already solid or assumed here). */
-export function budgetPlanWarnings(nodeIds: readonly string[], messages: readonly unknown[], budgetMin: number, math: boolean, earlierMaps: number): string[] {
+/** A time-boxed sitting's scope guard: only NEW nodes count (not ones already solid here or held on the global record). */
+export function budgetPlanWarnings(nodeIds: readonly string[], messages: readonly unknown[], budgetMin: number, math: boolean, earlierMaps: number, held: (id: string) => boolean = () => false): string[] {
 	const evidence = evidenceFromMessages(messages);
-	const fresh = nodeIds.filter((id) => { const s = nodeStatus(id, evidence); return s !== "solid" && s !== "conditional"; });
+	const fresh = nodeIds.filter((id) => nodeStatus(id, evidence) !== "solid" && !held(id));
 	const limit = budgetNodeLimit(budgetMin, math);
 	const warnings: string[] = [];
 	if (fresh.length > limit) {
@@ -144,9 +160,13 @@ export function planTools(ctx: PlanToolContext, options: { mathMode?: boolean } 
 				"Call once right after the probe concludes, to present the map; re-call whenever the map is wrong (the new block replaces the old tree). " +
 				"A mermaid graph block (any direction): one node per line (`slug[Short Title]` — slugs are permanent lowercase ids: a-z, 0-9, hyphens/underscores), " +
 				"`-->` edges meaning 'from must be understood before to' (chains fine). " + size +
-				"Every check you fire names the node it assesses via `nodeId`; where the lesson stands derives from those tags.",
+				"Every check you fire names the node it assesses via `nodeId`; where the lesson stands derives from those tags." +
+				(options.mathMode
+					? " MATH MODE: node ids are GLOBAL concept ids shared by every session. Reuse the id of an existing concept for the same idea (search_evidence finds them), so its evidence and memory carry over. " +
+						"Every NEW id needs an entry in `concepts`: kind and statement (exactly what is tested; one concept = one testable unit). New ids must name the idea specifically (not \"definition\" or \"held\")."
+					: ""),
 			parameters: planInitInput,
-			execute: serverExecute("plan_init", planInitInput, async ({ mermaid }) => {
+			execute: serverExecute("plan_init", planInitInput, async ({ mermaid, concepts }) => {
 				const { chatId, chatStore } = ctx;
 				const record = chatStore.getChat(chatId);
 				if (!record) return { ok: false, error: `Chat not found: ${chatId}` };
@@ -162,11 +182,14 @@ export function planTools(ctx: PlanToolContext, options: { mathMode?: boolean } 
 					// createTree validates the structure (duplicate ids, missing
 					// edge endpoints, self-loops, cycles → PlanTreeError).
 					const next = createTree(parsed.plan.nodes, parsed.plan.edges);
+					// GLOBAL CONCEPTS (docs/global-concepts-plan.md): in math mode a node id IS a concept id.
+					const conceptPlan = options.mathMode && ctx.mathStore ? planConcepts(ctx.mathStore, next, concepts ?? [], chatId) : null;
+					if (conceptPlan && conceptPlan.problems.length) return { ok: false, error: conceptPlan.problems.join("\n") };
 					const budget = record.settings?.timeboxMin;
 					// THE MAP IS THE COURSE'S (course-plans-plan.md §4): a time-boxed
 					// teach session's map is its course's full map; the budget
 					// limits the goals (set_goals), not the map.
-					const ports = ctx.courseStore ? { chatStore, courseStore: ctx.courseStore, ...(ctx.evidenceStore ? { evidenceStore: ctx.evidenceStore } : {}) } : null;
+					const ports = ctx.courseStore ? { chatStore, courseStore: ctx.courseStore, ...(ctx.mathStore ? { mathStore: ctx.mathStore } : {}) } : null;
 					const courseSitting = !!ports && (!!budget && (record.kind ?? "teach") === "teach" || !!record.settings?.courseId);
 					const course = ports && courseSitting ? courseOfChat(ports, chatId) ?? ensureCourseForChat(ports, chatId) : null;
 					if (ports && course) {
@@ -178,8 +201,9 @@ export function planTools(ctx: PlanToolContext, options: { mathMode?: boolean } 
 					const warnings = course
 						? courseMapWarnings(next.nodes.length, successfulPlanInits(record.messages))
 						: budget
-							? budgetPlanWarnings(next.nodes.map((n) => n.id), record.messages, budget + (record.settings?.timebox?.extendedMin ?? 0), options.mathMode === true, successfulPlanInits(record.messages))
+							? budgetPlanWarnings(next.nodes.map((n) => n.id), record.messages, budget + (record.settings?.timebox?.extendedMin ?? 0), options.mathMode === true, successfulPlanInits(record.messages), conceptPlan?.held ?? (() => false))
 							: options.mathMode ? mathPlanWarnings(next.nodes.length, successfulPlanInits(record.messages)) : [];
+					if (conceptPlan) conceptPlan.commit();
 					chatStore.saveTree(chatId, next);
 					if (ports && course) saveCourseMap(ports, course, next, chatId);
 					// Context diet: content = the validated nodeIds + the reminder (the
@@ -191,6 +215,8 @@ export function planTools(ctx: PlanToolContext, options: { mathMode?: boolean } 
 							ok: true,
 							nodeIds: next.nodes.map((n) => n.id),
 							reminder: PLAN_NODE_IDS_REMINDER,
+							...(conceptPlan?.reused.length ? { reusedConcepts: conceptPlan.reused, reuseNote: "These ids already existed: their evidence and memory carry over. If one is a different idea that only shares the id, rename that node and re-call plan_init." } : {}),
+							...(conceptPlan?.similar.length ? { possibleDuplicates: conceptPlan.similar } : {}),
 							...(warnings.length > 0 ? { scopeWarnings: warnings } : {}),
 						}),
 						details: { ok: true, tree: next },
@@ -200,6 +226,67 @@ export function planTools(ctx: PlanToolContext, options: { mathMode?: boolean } 
 					throw err;
 				}
 			}),
+		},
+	};
+}
+/**
+ * Resolve a math-mode map against the global concepts: existing ids are
+ * reused (echoed with their stored title), new ids need a scope and a
+ * specific id; likely duplicates of existing concepts are flagged. Nothing is
+ * written until `commit` (after the rest of plan_init's checks pass).
+ */
+export function planConcepts(store: MathStore, tree: PlanTree, scopes: ReadonlyArray<ConceptScopeInput & { id: string }>, chatId: string) {
+	const graph = store.graph();
+	const byId = new Map(scopes.map((s) => [s.id, s]));
+	const problems: string[] = [];
+	const reused: Array<{ id: string; title: string; kind: string; statement: string }> = [];
+	const similar: Array<{ node: string; existing: string; title: string }> = [];
+	const created: Concept[] = [];
+	const now = new Date().toISOString();
+	const inMap = new Set(tree.nodes.map((n) => n.id));
+	for (const extra of byId.keys()) if (!inMap.has(extra)) problems.push(`concepts names "${extra}", which is not a node of the map.`);
+	for (const node of tree.nodes) {
+		const existing = graph.concepts[node.id];
+		if (existing) {
+			reused.push({ id: node.id, title: existing.title, kind: existing.kind, statement: existing.statement });
+			continue;
+		}
+		const idProblem = newConceptIdProblem(node.id);
+		if (idProblem) { problems.push(idProblem); continue; }
+		const scope = byId.get(node.id);
+		const scopeIssues = scopeProblems(node.id, scope);
+		const lookalikes = similarConcepts(graph, `${node.title} ${scope?.statement ?? ""}`, { exclude: inMap });
+		for (const hit of lookalikes) similar.push({ node: node.id, existing: hit.concept.id, title: hit.concept.title });
+		if (scopeIssues.length || !scope) {
+			const hint = lookalikes.length ? [`  (${node.id} may be the existing ${lookalikes.map((h) => `"${h.concept.id}" (${h.concept.title})`).join(" or ")}: if so, use that id instead.)`] : [];
+			problems.push(...scopeIssues, ...hint);
+			continue;
+		}
+		const summary = scope.summary ?? node.summary;
+		created.push({
+			id: node.id,
+			title: node.title,
+			...(summary ? { summary } : {}),
+			kind: scope.kind,
+			statement: scope.statement.trim(),
+			...(scope.checks && Object.keys(scope.checks).length ? { checks: scope.checks } : {}),
+			createdAt: now,
+			createdIn: chatId,
+			status: "active",
+		});
+	}
+	const snapshot = new Map(storeSnapshot(store, Date.now()).map((item) => [item.id, item]));
+	return {
+		problems,
+		reused,
+		similar,
+		/** Solid on the global record and fresh: not new material for the budget guard. */
+		held: (id: string) => { const item = snapshot.get(id); return !!item && item.mastery === "solid" && !item.stale; },
+		commit() {
+			const latest = store.graph();
+			const concepts = { ...latest.concepts };
+			for (const c of created) if (!concepts[c.id]) concepts[c.id] = c;
+			store.saveGraph(withEdges({ ...latest, concepts }, tree.edges, chatId));
 		},
 	};
 }

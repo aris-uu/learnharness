@@ -1,12 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-	courseItemKeys, courseNodeViews, courseSeed, emptyCourse, mapFromMatches, matchTableProblems, proposeNodeMatches, reconstructedHandoff,
+	courseNodeViews, courseSeed, emptyCourse, mapFromMatches, matchTableProblems, proposeNodeMatches, reconstructedHandoff,
 	type CourseRecord, type CourseStore, type NodeMatchRow,
 } from "../src/core/course.ts";
 import { courseOfChat, ensureCourseForChat, seedForChat, startCourseSitting, syncSitting, ungroupChat, type CoursePorts } from "../src/core/course-ops.ts";
-import { memoryItems } from "../src/core/memory/items.ts";
-import type { EvidenceRecord } from "../src/core/math-evidence.ts";
+import type { Attempt } from "../src/core/math-concepts.ts";
+import { attempt, concept, graphOf, memoryMathStore } from "./math-store-fixture.ts";
 
 const NOW = "2026-11-23T10:00:00.000Z";
 
@@ -31,41 +31,20 @@ function fakeChats(chats: any[]) {
 	} as any;
 }
 
-const record = (chatId: string, nodeId: string, dimension: string, outcome = "correct", habits?: string[]): EvidenceRecord => ({
-	id: `${chatId}-${nodeId}-${dimension}-${outcome}`, chatId, nodeId, nodeTitle: nodeId, dimension, outcome, hints: 0, note: "n", recordedAt: NOW, ...(habits ? { habits } : {}),
-} as unknown as EvidenceRecord);
+const record = (chatId: string, conceptId: string, dimension: string): Attempt => attempt(conceptId, NOW, { chatId, dimension: dimension as Attempt["dimension"] });
 
-function ports(chats: any[], evidence: EvidenceRecord[] = []): CoursePorts & { chatStore: any } {
+function ports(chats: any[], attempts: Attempt[] = []): CoursePorts & { chatStore: any; mathStore: ReturnType<typeof memoryMathStore> } {
+	const ids = new Set(chats.flatMap((c) => (c.tree?.nodes ?? []).map((n: { id: string }) => n.id)));
 	return {
 		chatStore: fakeChats(chats),
 		courseStore: memoryCourses(),
-		evidenceStore: { list: () => evidence, exists: () => true, append: () => {}, replaceAll: () => {}, removeChat: () => 0 },
+		mathStore: memoryMathStore({ graph: graphOf([...ids].map((id) => concept(id))), attempts }),
 		now: () => Date.parse(NOW),
 	};
 }
 
 const tree = (...ids: Array<[string, string]>) => ({ nodes: ids.map(([id, title]) => ({ id, title })), edges: [] as Array<{ from: string; to: string }>, version: 1 });
 const userMessage = (text: string) => ({ id: "m1", role: "user", content: text, timestamp: Date.parse(NOW) });
-
-test("item keys: a chat outside every course keeps its own key; a sitting maps through aliases onto the course", () => {
-	const course: CourseRecord = { ...emptyCourse({ id: "crs_x", title: "PDE", nowIso: NOW }), aliases: { "old#transport-eq": "transport" }, sittings: [{ chatId: "old", startedAt: NOW, goals: [] }, { chatId: "new", startedAt: NOW, goals: [] }] };
-	const keys = courseItemKeys([course]);
-	assert.deepEqual(keys.key("loose", "a"), { id: "loose#a", nodeId: "a" });
-	assert.equal(keys.key("old", "transport-eq").id, "crs_x#transport");
-	assert.equal(keys.key("new", "transport").id, "crs_x#transport");
-	assert.equal(keys.courseOf("new"), "crs_x");
-	// Stored review item ids from before the course resolve to the course item.
-	assert.equal(keys.itemId("old#transport-eq"), "crs_x#transport");
-	assert.equal(keys.itemId("crs_x#transport"), "crs_x#transport");
-});
-
-test("memory items: two sittings' evidence on one course node is one item", () => {
-	const course: CourseRecord = { ...emptyCourse({ id: "crs_x", title: "PDE", nowIso: NOW }), aliases: { "old#t": "transport" }, sittings: [{ chatId: "old", startedAt: NOW, goals: [] }, { chatId: "new", startedAt: NOW, goals: [] }] };
-	const items = memoryItems([record("old", "t", "K"), record("new", "transport", "S")], [], undefined, courseItemKeys([course]));
-	assert.equal(items.length, 1);
-	assert.equal(items[0]!.id, "crs_x#transport");
-	assert.equal(items[0]!.courseId, "crs_x");
-});
 
 test("node views: done needs solid evidence, stale is solid with low recall, started is attempted", () => {
 	const course = emptyCourse({ title: "T", nowIso: NOW, map: tree(["a", "A"], ["b", "B"], ["c", "C"], ["d", "D"]) });
@@ -109,11 +88,11 @@ test("startCourseSitting: the next chat joins the course, gets the map, and its 
 });
 
 test("seed excludes the running sitting's own evidence, so it stays stable within a sitting", () => {
-	const evidence: EvidenceRecord[] = [];
-	const p = ports([{ id: "c1", title: "T", createdAt: NOW, messages: [], tree: tree(["a", "A"]), settings: {} }], evidence);
+	const p = ports([{ id: "c1", title: "T", createdAt: NOW, messages: [], tree: tree(["a", "A"]), settings: {} }]);
 	ensureCourseForChat(p, "c1");
 	const before = seedForChat(p, "c1")!.seed;
-	evidence.push(record("c1", "a", "K"), record("c1", "a", "S"));
+	p.mathStore.appendAttempt(record("c1", "a", "K"));
+	p.mathStore.appendAttempt(record("c1", "a", "S"));
 	assert.equal(seedForChat(p, "c1")!.seed, before);
 });
 
@@ -142,7 +121,7 @@ test("matching: similar titles are proposed as merges, the rest stay separate", 
 	assert.equal(rows.filter((r) => r.action === "separate").length, 2);
 });
 
-test("matching table: bad ids and double claims are refused; the map carries remapped edges", () => {
+test("matching table: bad ids and double claims are refused; the map carries remapped edges and the concept merges", () => {
 	const chats = [
 		{ chatId: "c1", tree: { ...tree(["a", "A"], ["b", "B"]), edges: [{ from: "a", to: "b" }] } },
 		{ chatId: "c2", tree: { ...tree(["a2", "A"], ["c", "C"]), edges: [{ from: "a2", to: "c" }] } },
@@ -155,17 +134,15 @@ test("matching table: bad ids and double claims are refused; the map carries rem
 		{ courseNodeId: "c", title: "C", from: { c2: "c" }, action: "drop" as const, reason: "" },
 	];
 	assert.deepEqual(matchTableProblems(rows, chats), []);
-	const { map, aliases } = mapFromMatches(rows, chats);
+	const { map, merges } = mapFromMatches(rows, chats);
 	assert.deepEqual(map.nodes.map((n) => n.id), ["a", "b"]);
 	assert.deepEqual(map.edges, [{ from: "a", to: "b" }]);
-	assert.equal(aliases["c2#a2"], "a");
-	assert.equal(aliases["c2#c"], undefined);
+	assert.deepEqual(merges, [{ from: "a2", into: "a" }], "a merged node is a concept merge; a dropped one is not");
 });
 
-test("ungroupChat removes the sitting and its aliases and deletes an empty course", () => {
+test("ungroupChat removes the sitting and deletes an empty course", () => {
 	const p = ports([{ id: "c1", title: "T", createdAt: NOW, messages: [], tree: tree(["a", "A"]), settings: {} }]);
 	const course = ensureCourseForChat(p, "c1")!;
-	p.courseStore.save({ ...course, aliases: { "c1#a": "a" } });
 	assert.equal(ungroupChat(p, course.id, "c1"), null);
 	assert.equal(p.courseStore.get(course.id), null);
 	assert.equal(p.chatStore.getChat("c1").settings.courseId, undefined);

@@ -7,23 +7,24 @@ import {
 	blockingPrerequisites,
 	describeWrittenQuestions,
 	evidenceFromMessages,
-	evidenceRecord,
 	habitsOf,
 	MATH_DIMENSIONS,
 	MATH_HABITS,
 	MATH_OUTCOMES,
-	MATH_STATUS_LABELS,
 	mathPitch,
 	nodeStatus,
 	RECORD_EVIDENCE_TOOL,
 	SEARCH_EVIDENCE_TOOL,
-	searchEvidence,
-	type EvidenceStore,
+	EVIDENCE_SEARCH_LIMIT,
 	type MathEvidence,
 } from "../../core/math-evidence.ts";
+import {
+	CONCEPT_KINDS, conceptBrief, scopeProblems, searchConcepts,
+	type Attempt, type Concept, type MathStore,
+} from "../../core/math-concepts.ts";
 import type { LhMessage } from "../../core/native-messages.ts";
-import { DEFAULT_DESIRED_RETENTION, itemKeys, memorySnapshot } from "../../core/memory/items.ts";
-import type { ReviewStore } from "../../core/memory/review.ts";
+import { asEvidence, DEFAULT_DESIRED_RETENTION, storeSnapshot, type MemoryItemSnapshot } from "../../core/memory/items.ts";
+import { ratingFor } from "../../core/memory/review.ts";
 import type { FsrsWeightsStore } from "../../core/memory/fsrs.ts";
 import { invalidInputResult } from "../tool-execute.ts";
 import { minutesIntoSitting } from "../../core/session-clock.ts";
@@ -31,8 +32,10 @@ import type { PlanToolContext } from "./plan.ts";
 
 const literals = <T extends string>(values: readonly T[]) => Type.Union(values.map((value) => Type.Literal(value)));
 
+export const UPDATE_CONCEPT_TOOL = "update_concept";
+
 const recordEvidenceInput = Type.Object({
-	nodeId: Type.String({ description: "The plan node this evidence is about. Must match a plan_init slug." }),
+	nodeId: Type.String({ description: "The concept this evidence is about: a node id of this session's plan map (node ids are global concept ids)." }),
 	dimension: literals(MATH_DIMENSIONS),
 	outcome: literals(MATH_OUTCOMES),
 	hints: Type.Integer({ minimum: 0, description: "How many hint rungs this answer needed. Zero when unaided." }),
@@ -41,41 +44,22 @@ const recordEvidenceInput = Type.Object({
 		description: "When the attempt fell short (partial, incorrect, or credit that needed a hint): which recurring habit caused it. Omit when none applies.",
 	})),
 	probeAnswer: Type.Optional(Type.String({
-		description: "For evidence from this session's probe, asked before the map existed: the tool-call id of the probe question (explain or recall) whose written answer shows this. Record the outcome that answer showed (correct, partial, incorrect). A probe answer is never recorded as assumed.",
-	})),
-	basisSession: Type.Optional(Type.String({
-		description: "Required for assumed: the sessionId (from search_evidence) of the EARLIER session whose recorded evidence justifies assuming this node. Never this session.",
+		description: "For evidence from this session's probe, asked before the map existed: the id of the probe question (explain or recall) whose written answer shows this. Record the outcome that answer showed. If you don't know the id, call without it: the refusal lists this session's answered questions with their ids.",
 	})),
 });
 
-type EvidenceInput = { nodeId: string; dimension: MathEvidence["dimension"]; outcome: MathEvidence["outcome"]; hints: number; note: string; habits?: unknown; probeAnswer?: string; basisSession?: string };
+type EvidenceInput = { nodeId: string; dimension: MathEvidence["dimension"]; outcome: MathEvidence["outcome"]; hints: number; note: string; habits?: unknown; probeAnswer?: string };
 
-/** Outcomes that are not attempts: they never carry evidence for another node. */
-const NOT_SHOWN = new Set<MathEvidence["outcome"]>(["assumed", "learner_override"]);
-
-/**
- * `assumed` is only for evidence from an earlier session. Anything this
- * session showed, the probe included, is recorded as what it showed (owner,
- * 2026-11-25: probe answers kept landing as assumed, so a node the learner
- * demonstrated got no credit and no forgetting curve). Returns the problem,
- * or null when the entry may stand.
- */
-function assumedProblem(entry: EvidenceInput, chatId: string, messages: readonly unknown[], evidenceStore: EvidenceStore | undefined): string | null {
-	if (entry.outcome !== "assumed") {
-		return entry.basisSession === undefined ? null : "basisSession belongs to assumed only. Drop it, or record assumed.";
-	}
-	const probeHint = "If this session's probe showed it, record the outcome the answer showed (correct, correct_slow, partial or incorrect) " +
-		"with that question's id as probeAnswer. If nothing shows it, test it with a written question, " +
-		"or record learner_override only if the learner explicitly asked to move on.\n" + describeWrittenQuestions(answeredWrittenQuestions(messages));
-	if (entry.probeAnswer !== undefined) return `A probe answer is evidence from this session, never assumed. ${probeHint}`;
-	const basis = entry.basisSession?.trim();
-	if (!basis) return `assumed needs basisSession: the sessionId of an earlier session (from search_evidence) whose evidence justifies it. ${probeHint}`;
-	if (basis === chatId) return `basisSession is this session. assumed is only for evidence from an earlier session. ${probeHint}`;
-	if (evidenceStore && !evidenceStore.list().some((record) => record.chatId === basis && !NOT_SHOWN.has(record.outcome))) {
-		return `basisSession "${basis}" holds no recorded attempt in the evidence ledger. Cite a sessionId that search_evidence returned with a real outcome. ${probeHint}`;
-	}
-	return null;
-}
+const updateConceptInput = Type.Object({
+	conceptId: Type.String({ description: "A concept id: a node of this plan, or one search_evidence returned." }),
+	title: Type.Optional(Type.String({ minLength: 1 })),
+	kind: Type.Optional(literals(CONCEPT_KINDS)),
+	statement: Type.Optional(Type.String({ minLength: 1, description: "Exactly what is tested: the definition with every clause, the theorem with every hypothesis, or the technique's steps and when it applies. One concept = one testable unit." })),
+	checks: Type.Optional(Type.Object({
+		K: Type.Optional(Type.String()), U: Type.Optional(Type.String()), S: Type.Optional(Type.String()), P: Type.Optional(Type.String()),
+	}, { description: "Per dimension, what a question on it must make the learner produce." })),
+	confusableWith: Type.Optional(Type.Array(Type.String(), { description: "Concept ids the learner easily mixes up with this one. Consolidation studies them together." })),
+});
 
 const CONCEAL_PROBLEM = "Math mode keeps the committed answer hidden so the attempt can continue: set conceal to true.";
 
@@ -90,69 +74,83 @@ export function requireConcealedAnswer(tool: AgentTool<any>): AgentTool<any> {
 	};
 }
 
-/** What the evidence tools close over. `evidenceStore` absent = no global
- *  ledger (tests): record_evidence still works, search_evidence is not offered. */
-export type MathToolContext = Pick<PlanToolContext, "chatId" | "chatStore"> & { evidenceStore?: EvidenceStore };
+/** What the math tools close over. `mathStore` absent = no global record
+ *  (bare tests): the sitting's transcript is the only evidence. */
+export type MathToolContext = Pick<PlanToolContext, "chatId" | "chatStore"> & { mathStore?: MathStore; weightsStore?: FsrsWeightsStore };
+
+/** Solid on the global record and still fresh: a prerequisite that needs no work here. */
+export function establishedGlobally(item: MemoryItemSnapshot | undefined): boolean {
+	return !!item && item.mastery === "solid" && !!item.state && item.retrievability >= DEFAULT_DESIRED_RETENTION;
+}
 
 const searchEvidenceInput = Type.Object({
-	query: Type.String({ minLength: 1, description: "Keywords for the topic, e.g. \"quadratic residues Legendre symbol\". Matched against node titles, summaries and evidence notes." }),
+	query: Type.String({ minLength: 1, description: "Keywords for the topic, e.g. \"quadratic residues Legendre symbol\". Matched against concept ids, titles, statements and summaries." }),
 });
 
-/** Search evidence recorded in the learner's OTHER sessions (math mode, prober and teacher). */
-export function searchEvidenceTool(ctx: MathToolContext & { evidenceStore: EvidenceStore; reviewStore?: ReviewStore; weightsStore?: FsrsWeightsStore }): AgentTool<typeof searchEvidenceInput> {
+/** Search the global concepts and what the learner has shown on them. */
+export function searchEvidenceTool(ctx: MathToolContext & { mathStore: MathStore }): AgentTool<typeof searchEvidenceInput> {
 	return {
 		name: SEARCH_EVIDENCE_TOOL,
 		label: SEARCH_EVIDENCE_TOOL,
 		description:
-			"Search mastery evidence recorded in the learner's earlier sessions (not this one). " +
-			"Keyword match over node title, summary and note; best matches first, newest first, at most 20. " +
-			"Each result gives the session, node, dimension (K/U/S/P), outcome, hints, note, date, the node's status in that session, " +
-			`and its memory: recall probability now from its forgetting curve, when it falls below ${DEFAULT_DESIRED_RETENTION}, and stale = solid there but likely forgotten since.`,
+			"Search the learner's global math concepts. Concepts are shared by every session: REUSE a result's id as the plan node id for the same idea, so its evidence and memory carry over. " +
+			`Best matches first, at most ${EVIDENCE_SEARCH_LIMIT}. Each gives the id, title, kind, statement, mastery (solid / in progress / not started), the credited dimensions, the last notes, ` +
+			`and memory: recall now, when it falls below ${DEFAULT_DESIRED_RETENTION}, and stale = solid but likely forgotten (re-test it with one short question before building on it).`,
 		parameters: searchEvidenceInput,
 		execute: async (_toolCallId, input) => {
-			const records = ctx.evidenceStore.list();
-			const hits = searchEvidence(records, input.query, ctx.chatId);
+			const graph = ctx.mathStore.graph();
+			const hits = searchConcepts(graph, input.query, EVIDENCE_SEARCH_LIMIT);
 			if (hits === null) return invalidInputResult(SEARCH_EVIDENCE_TOOL, ["query holds no searchable word (use words of two or more letters)."]);
+			const snapshot = new Map(storeSnapshot(ctx.mathStore, Date.now(), ctx.weightsStore?.read()).map((item) => [item.id, item]));
+			const attempts = ctx.mathStore.attempts();
 			const titles = new Map(ctx.chatStore.listChats().map((chat) => [chat.id, chat.title]));
-			const memory = new Map(memorySnapshot(records, Date.now(), { reviews: ctx.reviewStore?.list() ?? [], weights: ctx.weightsStore?.read() }).map((item) => [item.id, item]));
-			const results = hits.map(({ record, nodeStatus: status }) => ({
-				session: titles.get(record.chatId) ?? record.chatId,
-				sessionId: record.chatId,
-				node: record.nodeTitle,
-				...(record.nodeSummary ? { nodeSummary: record.nodeSummary } : {}),
-				nodeStatusInSession: MATH_STATUS_LABELS[status],
-				dimension: record.dimension,
-				outcome: record.outcome,
-				hints: record.hints,
-				note: record.note,
-				...(record.habits ? { habits: record.habits } : {}),
-				recordedAt: record.recordedAt,
-				...memoryFields(memory.get(itemKeys().key(record.chatId, record.nodeId).id)),
-			}));
+			const results = hits.map((concept) => {
+				const item = snapshot.get(concept.id);
+				const notes = attempts.filter((a) => a.conceptId === concept.id && !a.implicit).slice(-2).reverse().map((a) => ({ at: a.at, dimension: a.dimension, outcome: a.outcome, note: a.note, session: titles.get(a.chatId) ?? a.chatId }));
+				return {
+					...conceptBrief(concept),
+					...(concept.status === "retired" ? { retired: true } : {}),
+					mastery: item?.mastery ?? "none",
+					credited: item?.credited ?? [],
+					lastNotes: notes,
+					memory: !item ? { untested: true } : !item.state ? { unverified: true } : { recall: Math.round(item.retrievability * 100) / 100, dueAt: item.dueAt, stale: item.stale, stage: item.stage },
+				};
+			});
 			const details = { query: input.query, count: results.length, results };
 			return { content: [{ type: "text", text: JSON.stringify(details) }], details };
 		},
 	};
 }
 
-/** An item's curve as search_evidence reports it. */
-function memoryFields(item: ReturnType<typeof memorySnapshot>[number] | undefined) {
-	if (!item) return {};
-	if (item.status === "unverified") return { memory: { unverified: true } };
-	return { memory: { recall: Math.round(item.retrievability * 100) / 100, dueAt: item.dueAt, stale: item.stale } };
+/** The latest answered explain on a node in this transcript: what was asked. */
+function latestQuestionOn(messages: readonly LhMessage[], nodeId: string, answered: ReadonlyMap<string, string>): { id: string; question: string } | null {
+	let found: { id: string; question: string } | null = null;
+	for (const raw of messages as unknown as Array<{ role?: string; content?: unknown }>) {
+		if (raw.role !== "assistant" || !Array.isArray(raw.content)) continue;
+		for (const block of raw.content as Array<{ type?: string; id?: string; name?: string; arguments?: { nodeId?: unknown; question?: unknown } }>) {
+			if (block.type === "toolCall" && block.name === "explain" && block.arguments?.nodeId === nodeId && block.id && answered.has(block.id)) {
+				found = { id: block.id, question: typeof block.arguments.question === "string" ? block.arguments.question : "" };
+			}
+		}
+	}
+	return found;
 }
 
 /** The teacher's math tools. Evidence recorded during this run is kept here
- *  because the record may not hold it until the run settles. */
+ *  too, because the transcript may not hold it until the run settles. */
 export function mathTeacherTools(ctx: MathToolContext) {
 	const thisRun: MathEvidence[] = [];
 	const readRecord = () => {
 		const record = ctx.chatStore.getChat(ctx.chatId);
 		const messages = (record?.messages ?? []) as LhMessage[];
-		const persisted = evidenceFromMessages(messages);
-		const known = new Set(persisted.map((entry) => entry.id));
-		return { tree: record?.tree, settings: record?.settings, messages, evidence: [...persisted, ...thisRun.filter((entry) => !known.has(entry.id))] };
+		// The sitting's evidence: the global log's rows for this chat, else (no store) the transcript.
+		const stored = ctx.mathStore
+			? ctx.mathStore.attempts().filter((a) => a.chatId === ctx.chatId && !a.implicit).map(asEvidence)
+			: evidenceFromMessages(messages);
+		const known = new Set(stored.map((entry) => entry.id));
+		return { tree: record?.tree, settings: record?.settings, messages, evidence: [...stored, ...thisRun.filter((entry) => !known.has(entry.id))] };
 	};
+	const snapshotNow = () => ctx.mathStore ? new Map(storeSnapshot(ctx.mathStore, Date.now(), ctx.weightsStore?.read()).map((item) => [item.id, item])) : new Map<string, MemoryItemSnapshot>();
 
 	const gateExplain = (tool: AgentTool<any>): AgentTool<any> => requireConcealedAnswer({
 		...tool,
@@ -160,14 +158,22 @@ export function mathTeacherTools(ctx: MathToolContext) {
 			const { tree, messages, evidence } = readRecord();
 			const nodeId = (input as { nodeId?: unknown }).nodeId;
 			if (tree && typeof nodeId === "string" && tree.nodes.some((node) => node.id === nodeId)) {
+				const concept = ctx.mathStore?.graph().concepts[nodeId];
+				if (concept?.scopeDraft) {
+					return invalidInputResult(tool.name, [
+						`Concept ${nodeId} has a draft scope from the migration. Confirm or sharpen it with ${UPDATE_CONCEPT_TOOL} (kind and statement: exactly what is tested) before asking on it. Draft: ${JSON.stringify(conceptBrief(concept))}`,
+					]);
+				}
 				const current = derivePlanStatusesLh(tree, messages).current;
-				const blocked = blockingPrerequisites(tree, nodeId, current, evidence);
+				const snapshot = snapshotNow();
+				const blocked = blockingPrerequisites(tree, nodeId, current, evidence, (id) => establishedGlobally(snapshot.get(id)));
 				if (blocked.length > 0) {
+					const stale = blocked.filter((id) => snapshot.get(id)?.mastery === "solid");
 					return invalidInputResult(tool.name, [
 						`Mastery gate: prerequisite(s) ${blocked.join(", ")} of ${nodeId} are not established. ` +
-						"Keep working there with a written attempt. If this session's probe showed one, record what it showed with probeAnswer; " +
-						"if an earlier session showed it (search_evidence), record assumed with that session as basisSession; " +
-						"record learner_override only if the learner explicitly asked to move on.",
+						(stale.length ? `${stale.join(", ")} ${stale.length === 1 ? "was" : "were"} solid in an earlier session but recall has faded: ask one short retrieval question on each (it counts as its review), record it, then move on. ` : "") +
+						"Otherwise keep working there with a written attempt. If this session's probe showed one, record what it showed with probeAnswer. " +
+						"Record learner_override only if the learner explicitly asked to move on.",
 					]);
 				}
 			}
@@ -179,16 +185,20 @@ export function mathTeacherTools(ctx: MathToolContext) {
 		name: RECORD_EVIDENCE_TOOL,
 		label: RECORD_EVIDENCE_TOOL,
 		description:
-			"Record what the learner's latest written attempt demonstrated. Call it after judging an attempt, once per dimension shown. " +
+			"Record what the learner's latest written attempt demonstrated on a concept. Call it after judging an attempt, once per dimension shown. " +
 			"K = stated the definition or theorem, U = explained why or what breaks, S = used it on a case, P = produced a proof or key step. " +
 			"correct and correct_slow require a submitted written attempt on this node, or `probeAnswer` naming the probe question whose answer showed it. " +
-			"assumed = not tested in this session, justified by an earlier session's evidence named in basisSession; never for anything this session's probe showed. " +
+			"Evidence is global: it carries over to every later session on this concept, and the first attempt on a concept in a sitting moves its forgetting curve. " +
 			"learner_override = the learner explicitly chose to move on.",
 		parameters: recordEvidenceInput,
 		executionMode: "sequential",
 		execute: async (toolCallId, input) => {
 			const entry = input as EvidenceInput;
 			const { tree, settings, messages, evidence } = readRecord();
+			// The schema already restricts this; checked again because the log is the truth.
+			if (!(MATH_OUTCOMES as readonly string[]).includes(entry.outcome)) {
+				return invalidInputResult(RECORD_EVIDENCE_TOOL, [`outcome "${entry.outcome}" is not one of ${MATH_OUTCOMES.join(", ")}. Earlier sessions' evidence counts by itself: the concept is the same.`]);
+			}
 			if (!tree?.nodes.some((node) => node.id === entry.nodeId)) {
 				return invalidInputResult(RECORD_EVIDENCE_TOOL, [`nodeId "${entry.nodeId}" matches no node in this session's plan map.`]);
 			}
@@ -196,19 +206,38 @@ export function mathTeacherTools(ctx: MathToolContext) {
 			if (entry.probeAnswer !== undefined && !questions.has(entry.probeAnswer)) {
 				return invalidInputResult(RECORD_EVIDENCE_TOOL, [`probeAnswer "${entry.probeAnswer}" is not an answered written question (explain or recall) in this session.\n${describeWrittenQuestions(questions)}`]);
 			}
-			const assumed = assumedProblem(entry, ctx.chatId, messages, ctx.evidenceStore);
-			if (assumed) return invalidInputResult(RECORD_EVIDENCE_TOOL, [assumed]);
 			if ((entry.outcome === "correct" || entry.outcome === "correct_slow") && entry.probeAnswer === undefined && !attemptedNodes(messages).has(entry.nodeId)) {
-				return invalidInputResult(RECORD_EVIDENCE_TOOL, [`No submitted written attempt exists on ${entry.nodeId}, so it cannot earn credit. If this session's probe tested it, pass that question's id as probeAnswer. Do not record it as assumed instead.\n${describeWrittenQuestions(questions)}`]);
+				return invalidInputResult(RECORD_EVIDENCE_TOOL, [`No submitted written attempt exists on ${entry.nodeId}, so it cannot earn credit. If this session's probe tested it, pass that question's id as probeAnswer.\n${describeWrittenQuestions(questions)}`]);
 			}
-			const { habits: rawHabits, probeAnswer: _probeAnswer, basisSession: _basisSession, ...rest } = entry;
-			const habits = habitsOf(rawHabits);
-			const saved: MathEvidence = { ...rest, id: toolCallId, ...(habits ? { habits } : {}) };
+			const habits = habitsOf(entry.habits);
+			const saved: MathEvidence = { id: toolCallId, nodeId: entry.nodeId, dimension: entry.dimension, outcome: entry.outcome, hints: entry.hints, note: entry.note, ...(habits ? { habits } : {}) };
+			if (ctx.mathStore) {
+				const t = Date.now();
+				const asked = entry.probeAnswer !== undefined
+					? { id: entry.probeAnswer, question: questions.get(entry.probeAnswer) ?? "" }
+					: latestQuestionOn(messages, entry.nodeId, questions);
+				const attempt: Attempt = {
+					id: toolCallId,
+					conceptId: entry.nodeId,
+					chatId: ctx.chatId,
+					at: new Date(t).toISOString(),
+					source: entry.probeAnswer !== undefined ? "probe" : "teach",
+					role: "attempt",
+					dimension: entry.dimension,
+					outcome: entry.outcome,
+					hints: entry.hints,
+					note: entry.note,
+					...(entry.outcome !== "learner_override" ? { rating: ratingFor({ outcome: entry.outcome, hints: entry.hints }) } : {}),
+					...(asked?.question ? { question: asked.question.slice(0, 500) } : {}),
+					...(asked ? { questionCallId: asked.id } : {}),
+					...(habits ? { habits } : {}),
+					minutesIn: minutesIntoSitting(messages, t, settings),
+				};
+				// The log is the truth: a failed write is this call's failure.
+				try { ctx.mathStore.appendAttempt(attempt); }
+				catch (error) { return invalidInputResult(RECORD_EVIDENCE_TOOL, [`The evidence could not be saved (${(error as Error).message}). Try again.`]); }
+			}
 			thisRun.push(saved);
-			// The chat record stays the gate's truth; a failed ledger copy is logged, not fatal.
-			const t = Date.now();
-			try { ctx.evidenceStore?.append({ ...evidenceRecord(ctx.chatId, saved, tree, new Date(t).toISOString()), minutesIn: minutesIntoSitting(messages, t, settings) }); }
-			catch (error) { console.error(`[evidence] ledger append failed for ${ctx.chatId}:`, error); }
 			const all = [...evidence, saved];
 			const pitch = mathPitch(all);
 			const habitCounts: Record<string, number> = {};
@@ -226,5 +255,53 @@ export function mathTeacherTools(ctx: MathToolContext) {
 		},
 	};
 
-	return { gateExplain, recordEvidence };
+	return { gateExplain, recordEvidence, ...(ctx.mathStore ? { updateConcept: updateConceptTool({ ...ctx, mathStore: ctx.mathStore }) } : {}) };
+}
+
+/** Confirm or sharpen a concept's scope, and mark confusable neighbours (teacher and reviewer). */
+export function updateConceptTool(ctx: MathToolContext & { mathStore: MathStore }): AgentTool<typeof updateConceptInput> {
+	return {
+		name: UPDATE_CONCEPT_TOOL,
+		label: UPDATE_CONCEPT_TOOL,
+		description:
+			"Set a global concept's scope: its kind and its statement (exactly what is tested), optional per-dimension checks, and the concepts it is easily confused with. " +
+			"One concept = one testable unit: one definition, theorem, technique, example family or fact. A draft scope (scopeDraft) must be confirmed here before questions on it.",
+		parameters: updateConceptInput,
+		executionMode: "sequential",
+		execute: async (_toolCallId, input) => {
+			const graph = ctx.mathStore.graph();
+			const concept = graph.concepts[input.conceptId];
+			if (!concept) return invalidInputResult(UPDATE_CONCEPT_TOOL, [`No concept "${input.conceptId}". Use a node id of this plan or an id from search_evidence.`]);
+			const next: Concept = {
+				...concept,
+				...(input.title ? { title: input.title.trim() } : {}),
+				...(input.kind ? { kind: input.kind } : {}),
+				...(input.statement ? { statement: input.statement.trim() } : {}),
+			};
+			if (input.checks) {
+				const checks = Object.fromEntries(Object.entries(input.checks).filter(([, v]) => typeof v === "string" && v.trim()).map(([k, v]) => [k, (v as string).trim()]));
+				if (Object.keys(checks).length) next.checks = { ...(concept.checks ?? {}), ...checks };
+			}
+			if (input.confusableWith) {
+				const unknown = input.confusableWith.filter((id) => !graph.concepts[id] || id === concept.id);
+				if (unknown.length) return invalidInputResult(UPDATE_CONCEPT_TOOL, [`confusableWith names no other concept: ${unknown.join(", ")}.`]);
+				next.confusableWith = [...new Set([...(concept.confusableWith ?? []), ...input.confusableWith])];
+			}
+			if (concept.scopeDraft) {
+				if (!input.statement || !input.kind) return invalidInputResult(UPDATE_CONCEPT_TOOL, [`${concept.id} has a draft scope: pass both kind and statement to confirm it (they may repeat the draft when it is right).`]);
+				delete next.scopeDraft;
+			}
+			const problems = scopeProblems(next.id, next);
+			if (problems.length) return invalidInputResult(UPDATE_CONCEPT_TOOL, problems);
+			const concepts = { ...graph.concepts, [next.id]: next };
+			// Confusion is symmetric.
+			for (const other of input.confusableWith ?? []) {
+				const o = concepts[other]!;
+				concepts[other] = { ...o, confusableWith: [...new Set([...(o.confusableWith ?? []), next.id])] };
+			}
+			ctx.mathStore.saveGraph({ ...graph, concepts });
+			const details = { ok: true, concept: conceptBrief(next) };
+			return { content: [{ type: "text", text: JSON.stringify(details) }], details };
+		},
+	};
 }

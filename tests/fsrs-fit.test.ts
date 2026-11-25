@@ -19,8 +19,8 @@ const iso = (ms: number) => new Date(ms).toISOString();
 const tmp = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), "lh-fsrs-")), "memory", "fsrs-weights.json");
 
 const item = (events: Array<Omit<MemoryEvent, "itemId">>): MemoryItem => ({
-	id: "c#n", chatId: "c", nodeId: "n", title: "N", status: "scheduled", sessionStatus: "solid",
-	credited: [], evidenceCount: 1, events: events.map((e) => ({ itemId: "c#n", ...e })),
+	id: "n", title: "N", kind: "definition", statement: "N.", scopeDraft: false, retired: false, status: "scheduled", mastery: "solid",
+	credited: [], evidenceCount: 1, chatId: "c", chatIds: ["c"], everMature: false, events: events.map((e) => ({ itemId: "n", ...e })),
 });
 
 /** A synthetic but plausible log: Good-ish histories with growing gaps. */

@@ -20,9 +20,8 @@ import type { JobRecord } from "../core/contracts.ts";
 import type { JobStore } from "../core/ports.ts";
 import { jobTools, type DemoInput, type PdfInput, type ResearchInput, type VisualInput } from "./tools/jobs.ts";
 import { planTools, type PlanToolContext } from "./tools/plan.ts";
-import { mathTeacherTools, requireConcealedAnswer, searchEvidenceTool } from "./tools/math.ts";
-import type { EvidenceStore } from "../core/math-evidence.ts";
-import type { ReviewStore } from "../core/memory/review.ts";
+import { mathTeacherTools, requireConcealedAnswer, searchEvidenceTool, updateConceptTool } from "./tools/math.ts";
+import type { MathStore } from "../core/math-concepts.ts";
 import type { FsrsWeightsStore } from "../core/memory/fsrs.ts";
 import { reviewTools, type ReviewToolContext } from "./tools/review.ts";
 import type { TeachingProfile } from "../core/contracts/chat.ts";
@@ -284,10 +283,8 @@ export interface ProberToolContext extends ProbeDoneContext {
 	 *  master switch AND the agent.graphTools toggle (settings-resolution).
 	 *  Absent = the gate is closed, no map tools (tests drive this seam). */
 	graphStore?: GraphStore;
-	/** The global evidence ledger: present = search_evidence in math mode. */
-	evidenceStore?: EvidenceStore;
-	/** The review log: search_evidence's recall reflects reviews when present. */
-	reviewStore?: ReviewStore;
+	/** The global math record (concepts + attempts): present = search_evidence in math mode. */
+	mathStore?: MathStore;
 	/** Fitted FSRS weights for search_evidence's recall (absent: defaults). */
 	weightsStore?: FsrsWeightsStore;
 	/** Courses: present = record_digest when this chat is a course sitting. */
@@ -296,11 +293,11 @@ export interface ProberToolContext extends ProbeDoneContext {
 
 /** search_evidence for math mode, when the composition root wired the ledger. */
 function evidenceSearch(
-	ctx: { chatId: string; chatStore: PlanToolContext["chatStore"]; evidenceStore?: EvidenceStore; reviewStore?: ReviewStore; weightsStore?: FsrsWeightsStore },
+	ctx: { chatId: string; chatStore: PlanToolContext["chatStore"]; mathStore?: MathStore; weightsStore?: FsrsWeightsStore },
 	profile?: TeachingProfile,
 ): Record<string, AgentTool<any>> {
-	if (profile !== "math" || !ctx.evidenceStore) return {};
-	const tool = searchEvidenceTool({ chatId: ctx.chatId, chatStore: ctx.chatStore, evidenceStore: ctx.evidenceStore, ...(ctx.reviewStore ? { reviewStore: ctx.reviewStore } : {}), ...(ctx.weightsStore ? { weightsStore: ctx.weightsStore } : {}) });
+	if (profile !== "math" || !ctx.mathStore) return {};
+	const tool = searchEvidenceTool({ chatId: ctx.chatId, chatStore: ctx.chatStore, mathStore: ctx.mathStore, ...(ctx.weightsStore ? { weightsStore: ctx.weightsStore } : {}) });
 	return { [tool.name]: tool };
 }
 
@@ -435,12 +432,8 @@ export interface TeacherToolContext extends PlanToolContext {
 	spawn: (job: JobRecord, input: ResearchInput | DemoInput | VisualInput | PdfInput) => void;
 	/** Retained search-status seam; research dispatch is available keylessly. */
 	searchAvailable?: () => boolean;
-	/** The global evidence ledger: record_evidence copies into it, and
-	 *  search_evidence reads it (math mode). Absent in bare tests. */
-	evidenceStore?: EvidenceStore;
-	/** The review log (see ProberToolContext). */
-	reviewStore?: ReviewStore;
-	/** Fitted FSRS weights (see ProberToolContext). */
+	/** Fitted FSRS weights (see ProberToolContext). The global math record
+	 *  is PlanToolContext.mathStore: record_evidence appends attempts to it. */
 	weightsStore?: FsrsWeightsStore;
 }
 
@@ -507,6 +500,7 @@ export function createTeacherTools(
 			// only, always on — it shows the learner their own file.
 			show_image: createShowImageTool(ctx),
 			...(math ? { [math.recordEvidence.name]: math.recordEvidence } : {}),
+			...(math?.updateConcept ? { [math.updateConcept.name]: math.updateConcept } : {}),
 			...evidenceSearch(ctx, profile),
 			...planTools(ctx, { mathMode: profile === "math" }),
 			// Time-boxed sittings: goals and the close (tools/timebox.ts).
@@ -524,7 +518,9 @@ export function createTeacherTools(
  *  jobs, no graph. */
 export function createReviewerTools(ctx: ReviewToolContext, enabled?: EnabledTools): Record<string, AgentTool<any>> {
 	const review = reviewTools(ctx);
-	const search = searchEvidenceTool({ chatId: ctx.chatId, chatStore: ctx.chatStore, evidenceStore: ctx.evidenceStore, reviewStore: ctx.reviewStore, ...(ctx.weightsStore ? { weightsStore: ctx.weightsStore } : {}) });
+	const search = searchEvidenceTool({ chatId: ctx.chatId, chatStore: ctx.chatStore, mathStore: ctx.mathStore, ...(ctx.weightsStore ? { weightsStore: ctx.weightsStore } : {}) });
+	// Reviewers confirm a migrated concept's draft scope before its first question.
+	const scope = updateConceptTool({ chatId: ctx.chatId, chatStore: ctx.chatStore, mathStore: ctx.mathStore });
 	return healToolRecord(
 		filterEnabledTools(
 			{
@@ -534,8 +530,9 @@ export function createReviewerTools(ctx: ReviewToolContext, enabled?: EnabledToo
 				[review.pickItems.name]: review.pickItems,
 				[review.recordReview.name]: review.recordReview,
 				[search.name]: search,
+				[scope.name]: scope,
 				// A time-boxed review or consolidation sitting ends with close_session too.
-				...(ctx.chatStore.getChat(ctx.chatId)?.settings?.timeboxMin ? { close_session: timeboxTools({ ...ctx, evidenceStore: ctx.evidenceStore }).close_session! } : {}),
+				...(ctx.chatStore.getChat(ctx.chatId)?.settings?.timeboxMin ? { close_session: timeboxTools(ctx).close_session! } : {}),
 			},
 			withoutMechanics(enabled),
 		),

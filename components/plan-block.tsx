@@ -22,6 +22,29 @@ import { derivedNodeStatus, derivePlanStatuses } from "@/src/core";
 import { Hint } from "@/components/ui/hint";
 import { useAppearance } from "@/components/settings/appearance";
 import { InteractionLayerOwner, useInteractionLayer } from "./interaction-layers";
+import { useSessionProfile } from "@/components/math-mode";
+
+/** A math concept's recall now (GET /api/memory?ids=…), for the plan tint (R1). */
+export interface ConceptRecall { recall: number | null; stale: boolean; stage: string; due: boolean }
+
+/** Recall per node id, fetched once per id set; null until loaded or when disabled. */
+export function useConceptRecall(ids: readonly string[], enabled: boolean): Map<string, ConceptRecall> | null {
+	const key = enabled ? [...ids].sort().join(",") : "";
+	const [recall, setRecall] = useState<Map<string, ConceptRecall> | null>(null);
+	useEffect(() => {
+		if (!key) { setRecall(null); return; }
+		let live = true;
+		fetch(`/api/memory?ids=${encodeURIComponent(key)}`)
+			.then((res) => (res.ok ? res.json() : null))
+			.then((body: { recall?: Record<string, ConceptRecall> } | null) => { if (live && body?.recall) setRecall(new Map(Object.entries(body.recall))); })
+			.catch(() => {});
+		return () => { live = false; };
+	}, [key]);
+	return recall;
+}
+
+const recallLabel = (r: ConceptRecall) =>
+	r.recall === null ? "never verified" : `recall ${Math.round(r.recall * 100)}%${r.due ? " · due" : ""}${r.stale ? " · stale" : ""} · ${r.stage}`;
 
 /**
  * PLAN BLOCKS — the plan lives in the chat (wave 4): persisted
@@ -318,6 +341,7 @@ export function PlanDiagram({
 	monochrome,
 	fill,
 	badgeOf,
+	recallOf,
 }: {
 	/** usePlanLayout's result for these same nodes + edges. */
 	layout: PlanLayout;
@@ -339,6 +363,9 @@ export function PlanDiagram({
 	 *  the popup's transform math depends on it; w-full inside the popup's
 	 *  shrink-to-fit wrapper resolved to the popup width and broke fit. */
 	naturalSize?: boolean;
+	/** R1: the node's concept recall now, drawn as a thin bar along the box's
+	 *  bottom edge (its length is the recall; red when due) with a tooltip. */
+	recallOf?: (id: string) => ConceptRecall | undefined;
 	/** The in-chat block's mode: every node in the strong line ink (stroke
 	 *  and text, no glow) — statuses never show in the transcript (owner). */
 	monochrome?: boolean;
@@ -487,6 +514,18 @@ export function PlanDiagram({
 								filter={`url(#${markerId}-glow)`}
 							/>
 						)}
+						{(() => {
+							const r = recallOf?.(n.id);
+							if (!r) return null;
+							return (
+								<g data-testid={`plan-recall-${n.id}`}>
+									<title>{recallLabel(r)}</title>
+									<rect x={0} y={h - 3} width={w} height={3} className="fill-muted-foreground/15" />
+									<rect x={0} y={h - 3} width={w * (r.recall ?? 0)} height={3} className={r.due ? "fill-error/70" : "fill-primary/60"} />
+									{r.stale && <text x={4} y={layout.fontSize * 0.55} dominantBaseline="central" fontSize={layout.fontSize * 0.7} className="fill-error">!</text>}
+								</g>
+							);
+						})()}
 						{badgeOf?.(n.id) && (
 							<text
 								x={w - 4}
@@ -655,6 +694,10 @@ export function PlanPopup({ messages, onClose, chatId }: { messages: readonly Po
 	const badgeOf = courseMode && courseState
 		? (id: string) => ({ done: "✓", stale: "~", started: "…", later: undefined }[courseState.states.get(id) ?? "later"])
 		: undefined;
+	// R1: math-mode node ids are global concepts; tint each by its recall now.
+	const [profile] = useSessionProfile(chatId ?? "");
+	const recall = useConceptRecall(tree?.nodes.map((n) => n.id) ?? [], !!chatId && profile === "math");
+	const recallOf = recall ? (id: string) => recall.get(id) : undefined;
 
 	const rootRef = useRef<HTMLDivElement>(null);
 	const layer = useInteractionLayer({
@@ -856,6 +899,7 @@ export function PlanPopup({ messages, onClose, chatId }: { messages: readonly Po
 								markerId={markerId}
 								pad={POPUP_PAD}
 								badgeOf={badgeOf}
+								recallOf={recallOf}
 								naturalSize
 							/>
 						</div>

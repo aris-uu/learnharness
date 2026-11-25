@@ -10,9 +10,8 @@ import { serverExecute } from "../tool-execute.ts";
 import type { ChatStore } from "../../core/ports.ts";
 import { evidenceFromMessages } from "../../core/math-evidence.ts";
 import type { SessionGoal } from "../../core/session-clock.ts";
-import type { ReviewStore } from "../../core/memory/review.ts";
-import { budgetNodeLimit } from "../../core/session-clock.ts";
-import { evidenceFromMessages as sessionEvidence, nodeStatus, type EvidenceStore } from "../../core/math-evidence.ts";
+import type { MathStore } from "../../core/math-concepts.ts";
+import type { FsrsWeightsStore } from "../../core/memory/fsrs.ts";
 import { COURSE_DIGEST_MAX_CHARS, type CourseStore } from "../../core/course.ts";
 import { courseFacts, courseOfChat, ensureCourseForChat, saveDigest, syncSitting, type CoursePorts } from "../../core/course-ops.ts";
 
@@ -45,9 +44,9 @@ const closeInput = Type.Object({
 
 const CREDITED = new Set(["correct", "correct_slow"]);
 
-export function timeboxTools(ctx: { chatId: string; chatStore: ChatStore; reviewStore?: ReviewStore; courseStore?: CourseStore; evidenceStore?: EvidenceStore }): Record<string, AgentTool<any>> {
+export function timeboxTools(ctx: { chatId: string; chatStore: ChatStore; courseStore?: CourseStore; mathStore?: MathStore; weightsStore?: FsrsWeightsStore }): Record<string, AgentTool<any>> {
 	const record = () => ctx.chatStore.getChat(ctx.chatId);
-	const ports = () => ctx.courseStore ? { chatStore: ctx.chatStore, courseStore: ctx.courseStore, ...(ctx.evidenceStore ? { evidenceStore: ctx.evidenceStore } : {}), ...(ctx.reviewStore ? { reviews: () => ctx.reviewStore!.list() } : {}) } : null;
+	const ports = () => ctx.courseStore ? { chatStore: ctx.chatStore, courseStore: ctx.courseStore, ...(ctx.mathStore ? { mathStore: ctx.mathStore } : {}), ...(ctx.weightsStore ? { weights: () => ctx.weightsStore!.read() } : {}) } : null;
 	return {
 		[SET_GOALS_TOOL]: {
 			name: SET_GOALS_TOOL,
@@ -91,11 +90,11 @@ export function timeboxTools(ctx: { chatId: string; chatStore: ChatStore; review
 					const unbacked = goals.filter((g) => byId.get(g.id) === "met" && (g.nodeIds.length === 0 || uncredited(g).length > 0));
 					if (unbacked.length) return { ok: false, error: `"met" needs credited evidence on every node of the goal. Missing: ${unbacked.map((g) => `${g.id} (${uncredited(g).join(", ") || "no nodes"})`).join("; ")}. Mark it partial, or record the evidence first.` };
 				}
-				if (chat.kind === "review" && chat.settings?.consolidate && ctx.reviewStore && !closeChecksSkipped) {
-					const here = ctx.reviewStore.list().filter((e) => e.chatId === ctx.chatId);
-					const closed = new Set(here.filter((e) => e.kind === "check" && e.check === "close").map((e) => e.itemId));
-					const owed = [...new Set(here.filter((e) => e.kind === "review").map((e) => e.itemId))].filter((id) => !closed.has(id));
-					if (owed.length) return { ok: false, error: `No blank-page close check yet on: ${owed.map((id) => id.slice(id.indexOf("#") + 1)).join(", ")}. Ask one per item and grade it with record_review check: "close", or pass closeChecksSkipped with the reason.` };
+				if (chat.kind === "review" && chat.settings?.consolidate && ctx.mathStore && !closeChecksSkipped) {
+					const here = ctx.mathStore.attempts().filter((a) => a.chatId === ctx.chatId);
+					const closed = new Set(here.filter((a) => a.role === "check" && a.check === "close").map((a) => a.conceptId));
+					const owed = [...new Set(here.filter((a) => a.role === "attempt").map((a) => a.conceptId))].filter((id) => !closed.has(id));
+					if (owed.length) return { ok: false, error: `No blank-page close check yet on: ${owed.join(", ")}. Ask one per item and grade it with record_review check: "close", or pass closeChecksSkipped with the reason.` };
 				}
 				const closedGoals = goals.map((g) => ({ ...g, status: byId.get(g.id) ?? g.status }));
 				const closedAt = new Date().toISOString();

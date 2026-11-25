@@ -108,6 +108,11 @@ export function resumedAfterHours(messages: readonly unknown[], nowMs: number): 
 }
 
 /** How many new math-mode nodes a budget fits (≈ 3 per hour of teaching), standard ≈ 8. */
+/** How many items a consolidation sitting of this budget holds (~12 min each, consolidation plan §3): 2–5. */
+export function consolidationItemCount(budgetMin: number): number {
+	return Math.max(2, Math.min(5, Math.round(budgetMin / 12)));
+}
+
 export function budgetNodeLimit(budgetMin: number, math: boolean): number {
 	const teachMin = budgetMin * 0.75;
 	return Math.max(1, Math.ceil(teachMin / (math ? 20 : 7.5)));

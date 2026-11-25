@@ -6,21 +6,20 @@
  */
 import type { ChatRecord, PlanTree } from "./contracts.ts";
 import type { ChatStore } from "./ports.ts";
-import { nodeStatus, type EvidenceRecord, type EvidenceStore } from "./math-evidence.ts";
-import { memorySnapshot } from "./memory/items.ts";
-import type { MemoryEvent } from "./memory/items.ts";
+import type { MathStore } from "./math-concepts.ts";
+import { storeSnapshot } from "./memory/items.ts";
 import type { FsrsWeights } from "./memory/fsrs.ts";
 import { danglingQuestionOf, type LhMessage } from "./native-messages.ts";
 import {
-	attachmentPaths, courseItemKeys, courseNodeViews, courseSeed, emptyCourse, isCourseId, reconstructedHandoff, upsertSitting, withMap,
+	attachmentPaths, courseNodeViews, courseSeed, emptyCourse, isCourseId, reconstructedHandoff, upsertSitting, withMap,
 	type CourseNodeFacts, type CourseNodeView, type CourseRecord, type CourseSitting, type CourseSource, type CourseStore,
 } from "./course.ts";
 
 export interface CoursePorts {
 	chatStore: ChatStore;
 	courseStore: CourseStore;
-	evidenceStore?: EvidenceStore;
-	reviews?: () => readonly MemoryEvent[];
+	/** The global math record: course node facts are its concepts' facts. */
+	mathStore?: MathStore;
 	weights?: () => FsrsWeights | undefined;
 	now?: () => number;
 }
@@ -78,31 +77,29 @@ function unlinkChat(ports: CoursePorts, chatId: string): void {
 }
 
 /**
- * The evidence facts per course node, resolved through the course's
- * aliases. `excludeChatId` leaves out one sitting (the running one), so the
- * seed in its system prompt stays stable while it records evidence.
+ * The facts per course node: the node IS a global concept, so its facts are
+ * the concept's over every session. `excludeChatId` leaves out one sitting
+ * (the running one), so the seed in its system prompt stays stable while it
+ * records evidence.
  */
 export function courseFacts(ports: CoursePorts, course: CourseRecord, options: { excludeChatId?: string } = {}): Map<string, CourseNodeFacts> {
 	const facts = new Map<string, CourseNodeFacts>();
-	if (!ports.evidenceStore) return facts;
-	const keys = courseItemKeys(ports.courseStore.list().filter((c) => c.id !== course.id).concat(course));
-	const records = ports.evidenceStore.list().filter((r) => keys.courseOf(r.chatId) === course.id && r.chatId !== options.excludeChatId);
-	const byNode = new Map<string, EvidenceRecord[]>();
-	for (const record of records) {
-		const nodeId = keys.key(record.chatId, record.nodeId).nodeId;
-		const list = byNode.get(nodeId) ?? [];
-		list.push({ ...record, nodeId });
-		byNode.set(nodeId, list);
-	}
+	if (!ports.mathStore) return facts;
+	const ids = new Set(course.map.nodes.map((n) => n.id));
+	const store = ports.mathStore;
+	const view: MathStore = options.excludeChatId
+		? { ...store, attempts: () => store.attempts().filter((a) => a.chatId !== options.excludeChatId) }
+		: store;
 	const now = (ports.now ?? Date.now)();
-	const snapshot = new Map(memorySnapshot(records, now, { reviews: ports.reviews?.() ?? [], weights: ports.weights?.(), keys }).map((item) => [item.nodeId, item]));
-	for (const [nodeId, list] of byNode) {
-		const status = nodeStatus(nodeId, list);
-		facts.set(nodeId, {
-			solid: status === "solid",
-			attempted: list.some((r) => r.outcome !== "assumed"),
-			stale: snapshot.get(nodeId)?.stale ?? false,
-			habits: list.flatMap((r) => r.habits ?? []),
+	const attempts = view.attempts().filter((a) => ids.has(a.conceptId) && !a.implicit);
+	for (const item of storeSnapshot(view, now, ports.weights?.())) {
+		if (!ids.has(item.id) || item.evidenceCount === 0) continue;
+		const own = attempts.filter((a) => a.conceptId === item.id);
+		facts.set(item.id, {
+			solid: item.mastery === "solid",
+			attempted: own.some((a) => a.outcome !== "learner_override"),
+			stale: item.stale,
+			habits: own.flatMap((a) => a.habits ?? []),
 		});
 	}
 	return facts;
@@ -148,10 +145,7 @@ export function ensureCourseForChat(ports: CoursePorts, chatId: string, options:
 }
 
 function withReconstructedHandoff(ports: CoursePorts, course: CourseRecord, chat: ChatRecord): CourseRecord {
-	const views = courseViews(ports, course).filter((v) => {
-		const keys = courseItemKeys([course]);
-		return chat.tree?.nodes.some((n) => keys.key(chat.id, n.id).nodeId === v.id) ?? false;
-	});
+	const views = courseViews(ports, course).filter((v) => chat.tree?.nodes.some((n) => n.id === v.id) ?? false);
 	const lastTeacher = [...chat.messages].reverse().find((m) => m.role === "assistant" && textOf(m).trim());
 	const pendingInput = danglingQuestionOf(chat.messages)?.input as { question?: unknown } | undefined;
 	const pending = typeof pendingInput?.question === "string" ? pendingInput.question : undefined;
@@ -219,14 +213,12 @@ export function saveDigest(ports: CoursePorts, course: CourseRecord, digest: str
 
 // ─── Grouping (§9.2) ─────────────────────────────────────────────────────────
 
-/** Remove a chat from its course: its aliases and sitting go; nothing else is touched. */
+/** Remove a chat from its course: its sitting and source go; nothing else is touched (its concepts stay global). */
 export function ungroupChat(ports: CoursePorts, courseId: string, chatId: string): CourseRecord | null {
 	const course = ports.courseStore.get(courseId);
 	if (!course) return null;
-	const aliases = Object.fromEntries(Object.entries(course.aliases).filter(([key]) => !key.startsWith(`${chatId}#`)));
 	const next: CourseRecord = {
 		...course,
-		aliases,
 		sittings: course.sittings.filter((s) => s.chatId !== chatId),
 		sources: course.sources.filter((s) => s.chatId !== chatId),
 		updatedAt: iso(ports),

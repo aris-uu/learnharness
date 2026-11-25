@@ -5,8 +5,9 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import { composeInstructions } from "../src/agent/teacher-agent.ts";
 import { mathPlanWarnings, MATH_PLAN_NODE_SOFT_LIMIT, successfulPlanInits } from "../src/agent/tools/plan.ts";
-import { evidenceFromMessages, habitsOf, type EvidenceRecord } from "../src/core/math-evidence.ts";
-import { createEvidenceStore } from "../src/store/evidence.ts";
+import { evidenceFromMessages, habitsOf } from "../src/core/math-evidence.ts";
+import type { Attempt } from "../src/core/math-concepts.ts";
+import { createMathStore } from "../src/store/math.ts";
 
 describe("math habit tags", () => {
 	it("keeps known tags once and drops unknown ones", () => {
@@ -30,15 +31,15 @@ describe("math habit tags", () => {
 		assert.equal("habits" in plain!, false);
 	});
 
-	it("round-trips tagged ledger records and rejects invalid tags", (t) => {
+	it("round-trips tagged attempts and rejects invalid tags", (t) => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "habits-"));
 		t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-		const file = path.join(dir, "evidence.jsonl");
-		const store = createEvidenceStore(file);
-		const base: EvidenceRecord = { id: "a", chatId: "c", nodeId: "n", nodeTitle: "N", dimension: "P", outcome: "partial", hints: 0, note: "x", recordedAt: "2026-11-18T00:00:00.000Z" };
-		store.append({ ...base, habits: ["backward_only"] });
-		fs.appendFileSync(file, `${JSON.stringify({ ...base, id: "b", habits: ["made_up"] })}\n`);
-		assert.deepEqual(store.list().map((r) => [r.id, r.habits]), [["a", ["backward_only"]]]);
+		const store = createMathStore(dir);
+		const base: Attempt = { id: "a", conceptId: "n-concept", chatId: "c", at: "2026-11-18T00:00:00.000Z", source: "teach", role: "attempt", dimension: "P", outcome: "partial", hints: 0, note: "x", rating: 1 };
+		store.appendAttempt({ ...base, habits: ["backward_only"] });
+		fs.appendFileSync(store.files.attempts, `${JSON.stringify({ ...base, id: "b", habits: ["made_up"] })}\n`);
+		assert.deepEqual(store.attempts().map((r) => [r.id, r.habits]), [["a", ["backward_only"]]]);
+		assert.throws(() => store.appendAttempt({ ...base, id: "c", habits: ["made_up" as never] }), /invalid attempt/);
 	});
 
 	it("puts the habit doctrine in the math teacher only", () => {

@@ -19,6 +19,7 @@ export { prepareSubmissionImages, prepareSubmissionImageChannels } from "./submi
 export * from "./stores.ts";
 export * from "./memory.ts";
 export * from "./courses.ts";
+export * from "./concepts.ts";
 export { refreshWorkerRequestAdmission } from "../agent/worker-request-admission.ts";
 export { readRenderSettings, writeRenderSettings } from "../store/render-settings.ts";
 // The settings record + prompt overrides (settings-storage wave, 2026-09-19).

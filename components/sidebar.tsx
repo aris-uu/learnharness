@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { MenuShell } from "@/components/menu-shell";
 import { DeleteFolderDialog, DeleteSessionDialog, folderDeleteCopy, type DeleteDialogCopy } from "@/components/delete-session-dialog";
 import type { ChatDeleteMode, ThemeMode } from "@/src/core";
-import { BookOpenIcon, BrainIcon, DumbbellIcon, FolderPlusIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
+import { BookOpenIcon, BrainIcon, DumbbellIcon, FolderPlusIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, RepeatIcon, SearchIcon, SettingsIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
 import { CoverageMenuBlock } from "@/components/extraction-coverage";
 import { LhMark } from "@/components/lh-mark";
@@ -63,6 +63,7 @@ import type { ChatGPTControlBridge, NativeSubscriptionControlBridge } from "@/sr
 import type { UpdateState } from "@/components/settings/update-settings.tsx";
 import { FilePathDropZone } from "@/components/file-path-drop-zone";
 import { NEW_REVIEW_HREF, useMemoryDueSplit } from "@/components/start-review";
+import { writeDraftConsolidate } from "@/components/math-mode";
 const SIDEBAR_AUTOCLOSE = 928;
 
 // Module scope, guarded for SSR (the server has no navigator).
@@ -904,16 +905,30 @@ function SessionsSidebar() {
 						<span className="min-w-0 truncate">Practice</span>
 						<span className="sr-only">create a new practice session</span>
 					</button>
+					{/* C4 (consolidation plan): two doors. Learning and relearning
+					    concepts go to consolidation, mature ones to review. */}
+					<button
+						type="button"
+						data-testid="new-session-consolidate"
+						title="Consolidate: re-teach concepts still in learning"
+						onClick={() => { writeDraftConsolidate(true); router.push(NEW_REVIEW_HREF); }}
+						className="flex min-w-0 w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+					>
+						<RepeatIcon className="size-3 shrink-0" />
+						<span className="min-w-0 truncate">Consolidate</span>
+						{memorySplit?.learning ? <span data-testid="consolidate-due-badge" className="ml-auto rounded-sm bg-accent px-1 font-mono text-[10px] normal-case tracking-normal text-foreground">{memorySplit.learning}</span> : null}
+						<span className="sr-only">create a new consolidation session</span>
+					</button>
 					<button
 						type="button"
 						data-testid="new-session-review"
-						title="Review"
-						onClick={() => router.push(NEW_REVIEW_HREF)}
+						title="Review: test mature concepts"
+						onClick={() => { writeDraftConsolidate(false); router.push(NEW_REVIEW_HREF); }}
 						className="flex min-w-0 w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 					>
 						<BrainIcon className="size-3 shrink-0" />
 						<span className="min-w-0 truncate">Review</span>
-						{memoryDue ? <span className="ml-auto rounded-sm bg-accent px-1 font-mono text-[10px] normal-case tracking-normal text-foreground">{memoryDue}</span> : null}
+						{memorySplit?.mature ? <span data-testid="review-due-badge" className="ml-auto rounded-sm bg-accent px-1 font-mono text-[10px] normal-case tracking-normal text-foreground">{memorySplit.mature}</span> : null}
 						<span className="sr-only">create a new review session</span>
 					</button>
 				</PluginSidebarActions>

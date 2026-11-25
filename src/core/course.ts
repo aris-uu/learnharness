@@ -6,16 +6,15 @@
  * and the list of its sittings. A sitting is still one time-boxed chat; the
  * time budget limits a sitting's goals, never the course map.
  *
- * Identity (§3): a course has its own id (crs_…). Memory items of a course
- * are keyed `${courseId}#${nodeId}`. Items that existed before the course
- * keep their stored `${chatId}#${nodeId}` key; the course's `aliases` map
- * them onto course nodes, and every read resolves through them, so nothing
- * stored is ever rewritten. Pure: no IO here.
+ * Identity: a course has its own id (crs_…). Its map's node ids are GLOBAL
+ * concept ids (docs/global-concepts-plan.md), the same ids every sitting
+ * and every other session use, so there is no alias table: two nodes that
+ * turn out to be one idea are merged as concepts. Pure: no IO here.
  */
 import type { PlanEdge, PlanNode, PlanTree } from "./contracts/plan.ts";
 import type { SessionGoal } from "./session-clock.ts";
 
-export const COURSE_FORMAT = 1;
+export const COURSE_FORMAT = 2;
 export const COURSE_ID_PATTERN = /^crs_[A-Za-z0-9_-]+$/;
 /** Past this many nodes plan_init warns that the course may be two courses. */
 export const COURSE_MAP_SOFT_LIMIT = 40;
@@ -55,8 +54,6 @@ export interface CourseRecord {
 	map: PlanTree;
 	mapHistory: Array<{ at: string; chatId: string; tree: PlanTree }>;
 	sittings: CourseSitting[];
-	/** Old item key `${chatId}#${nodeId}` → course node id. */
-	aliases: Record<string, string>;
 }
 
 /** The courses store port (adapter: src/store/courses.ts). */
@@ -69,7 +66,6 @@ export interface CourseStore {
 
 export const newCourseId = (nowMs = Date.now()) => `crs_${nowMs.toString(36)}_${globalThis.crypto.randomUUID().slice(0, 8)}`;
 export const isCourseId = (id: string) => id.startsWith("crs_");
-export const courseItemId = (courseId: string, nodeId: string) => `${courseId}#${nodeId}`;
 
 export function emptyCourse(input: { id?: string; title: string; nowIso: string; map?: PlanTree }): CourseRecord {
 	return {
@@ -82,7 +78,6 @@ export function emptyCourse(input: { id?: string; title: string; nowIso: string;
 		map: input.map ?? { nodes: [], edges: [], version: 1 },
 		mapHistory: [],
 		sittings: [],
-		aliases: {},
 	};
 }
 
@@ -90,57 +85,7 @@ export function isCourseRecord(value: unknown): value is CourseRecord {
 	const r = value as Partial<CourseRecord> | null;
 	return !!r && typeof r === "object" && r.format === COURSE_FORMAT && typeof r.id === "string" && COURSE_ID_PATTERN.test(r.id) &&
 		typeof r.title === "string" && Array.isArray(r.sources) && !!r.map && Array.isArray(r.map.nodes) && Array.isArray(r.map.edges) &&
-		Array.isArray(r.sittings) && !!r.aliases && typeof r.aliases === "object";
-}
-
-// ─── Item keys: which memory item a (chat, node) pair counts toward ─────────
-
-export interface ItemKey {
-	/** The memory item id. */
-	id: string;
-	courseId?: string;
-	/** The node id within the item's map (course node when in a course). */
-	nodeId: string;
-}
-
-export interface ItemKeyResolver {
-	key(chatId: string, nodeId: string): ItemKey;
-	/** A stored item id (review events) → the id it counts toward now. */
-	itemId(stored: string): string;
-	/** The course a chat belongs to, if any. */
-	courseOf(chatId: string): string | undefined;
-}
-
-export const IDENTITY_ITEM_KEYS: ItemKeyResolver = {
-	key: (chatId, nodeId) => ({ id: `${chatId}#${nodeId}`, nodeId }),
-	itemId: (stored) => stored,
-	courseOf: () => undefined,
-};
-
-/**
- * The resolver over a set of courses. A chat belongs to the course listing
- * it as a sitting. An explicit alias wins; otherwise a course sitting's node
- * id IS the course node id (sittings plan with the course's ids).
- */
-export function courseItemKeys(courses: readonly CourseRecord[]): ItemKeyResolver {
-	const courseOfChat = new Map<string, CourseRecord>();
-	for (const course of courses) for (const sitting of course.sittings) courseOfChat.set(sitting.chatId, course);
-	const key = (chatId: string, nodeId: string): ItemKey => {
-		const course = courseOfChat.get(chatId);
-		if (!course) return { id: `${chatId}#${nodeId}`, nodeId };
-		const mapped = course.aliases[`${chatId}#${nodeId}`] ?? nodeId;
-		return { id: courseItemId(course.id, mapped), courseId: course.id, nodeId: mapped };
-	};
-	return {
-		key,
-		itemId(stored) {
-			if (isCourseId(stored)) return stored;
-			const hash = stored.indexOf("#");
-			if (hash < 0) return stored;
-			return key(stored.slice(0, hash), stored.slice(hash + 1)).id;
-		},
-		courseOf: (chatId) => courseOfChat.get(chatId)?.id,
-	};
+		Array.isArray(r.sittings);
 }
 
 // ─── Sources ─────────────────────────────────────────────────────────────────
@@ -281,12 +226,13 @@ export function courseDoctrine(continuation: boolean): string {
 
 // ─── Adoption (§9) ───────────────────────────────────────────────────────────
 
-/** One row of the node-matching table (§9.2). */
+/** One row of the node-matching table (§9.2). Node ids are global concepts:
+ *  a "merge" row merges every id in `from` into `courseNodeId` (one of them). */
 export interface NodeMatchRow {
-	/** The course node id the row produces. */
+	/** The concept the row keeps: one of its `from` ids. */
 	courseNodeId: string;
 	title: string;
-	/** chatId → that chat's node id. */
+	/** source id (chat or course) → that source's node id. */
 	from: Record<string, string>;
 	action: "merge" | "separate" | "drop";
 	/** Why the row was proposed this way. */
@@ -304,62 +250,63 @@ export function titleSimilarity(a: string, b: string): number {
 	for (const t of x) if (y.has(t)) shared++;
 	return shared / (x.size + y.size - shared);
 }
-/** Above this similarity, rows are proposed as one node (the learner confirms). */
+/** Above this similarity, two different concepts are proposed as one (the learner confirms). */
 export const MATCH_THRESHOLD = 0.6;
 
-function slugify(raw: string): string {
-	return raw.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "node";
-}
-
 /**
- * Propose the matching table for grouping chats (§9.2). Deterministic and
- * conservative: identical slugs with similar titles, or very similar titles,
- * are proposed as merges; everything else stays separate. The learner
- * confirms every row before anything is written.
+ * Propose the table for grouping sources (§9.2). The same id in several
+ * sources is one concept already, so it is one row. Different ids with very
+ * similar titles are proposed as a merge; everything else stays separate.
+ * The learner confirms every row before anything is written.
  */
-export function proposeNodeMatches(chats: ReadonlyArray<{ chatId: string; tree: PlanTree | undefined }>): NodeMatchRow[] {
+export function proposeNodeMatches(sources: ReadonlyArray<{ chatId: string; tree: PlanTree | undefined }>): NodeMatchRow[] {
 	const rows: NodeMatchRow[] = [];
-	const used = new Set<string>();
-	const unique = (base: string) => { let id = slugify(base); for (let n = 2; used.has(id); n++) id = `${slugify(base)}-${n}`; used.add(id); return id; };
-	for (const { chatId, tree } of chats) {
+	const rowOf = new Map<string, NodeMatchRow>();
+	for (const { chatId, tree } of sources) {
 		for (const node of tree?.nodes ?? []) {
+			const same = rowOf.get(node.id);
+			if (same) { same.from[chatId] = node.id; continue; }
 			let best: { row: NodeMatchRow; score: number } | null = null;
 			for (const row of rows) {
-				if (row.from[chatId]) continue; // one node per chat per row
-				const sameSlug = Object.values(row.from).includes(node.id);
-				const score = titleSimilarity(row.title, node.title) + (sameSlug ? 0.25 : 0);
+				if (row.from[chatId]) continue; // one node per source per row
+				const score = titleSimilarity(row.title, node.title);
 				if (score >= MATCH_THRESHOLD && (!best || score > best.score)) best = { row, score };
 			}
 			if (best) {
 				best.row.from[chatId] = node.id;
 				best.row.action = "merge";
 				best.row.reason = `titles match (${Math.round(Math.min(1, best.score) * 100)}%)`;
+				rowOf.set(node.id, best.row);
 			} else {
-				rows.push({ courseNodeId: unique(node.id), title: node.title, from: { [chatId]: node.id }, action: "separate", reason: "only one" });
+				const row: NodeMatchRow = { courseNodeId: node.id, title: node.title, from: { [chatId]: node.id }, action: "separate", reason: "only one" };
+				rows.push(row);
+				rowOf.set(node.id, row);
 			}
 		}
 	}
 	return rows;
 }
 
-/** Validate a confirmed table: every from-entry names a real node, ids are unique slugs. */
-export function matchTableProblems(rows: readonly NodeMatchRow[], chats: ReadonlyArray<{ chatId: string; tree: PlanTree | undefined }>): string[] {
+/** Validate a confirmed table: every from-entry names a real node; a row keeps one of its own ids. */
+export function matchTableProblems(rows: readonly NodeMatchRow[], sources: ReadonlyArray<{ chatId: string; tree: PlanTree | undefined }>): string[] {
 	const problems: string[] = [];
-	const nodeSets = new Map(chats.map((c) => [c.chatId, new Set(c.tree?.nodes.map((n) => n.id) ?? [])]));
-	const ids = new Set<string>();
-	const claimed = new Set<string>();
+	const nodeSets = new Map(sources.map((c) => [c.chatId, new Set(c.tree?.nodes.map((n) => n.id) ?? [])]));
+	const kept = new Set<string>();
+	const claimed = new Map<string, string>();
 	for (const row of rows) {
+		const ids = new Set(Object.values(row.from));
 		if (row.action !== "drop") {
-			if (!/^[a-z0-9_-]+$/.test(row.courseNodeId)) problems.push(`"${row.courseNodeId}" is not a lowercase slug.`);
-			if (ids.has(row.courseNodeId)) problems.push(`"${row.courseNodeId}" is used twice.`);
-			ids.add(row.courseNodeId);
+			if (!ids.has(row.courseNodeId)) problems.push(`Row "${row.courseNodeId}" must keep one of its own concept ids (${[...ids].join(", ")}).`);
+			if (kept.has(row.courseNodeId)) problems.push(`"${row.courseNodeId}" is kept by two rows.`);
+			kept.add(row.courseNodeId);
 		}
-		if (row.action === "merge" && Object.keys(row.from).length < 2) problems.push(`Row "${row.courseNodeId}" merges fewer than two nodes.`);
+		if (row.action === "separate" && ids.size > 1) problems.push(`Row "${row.courseNodeId}" holds different concepts (${[...ids].join(", ")}) without merging them.`);
+		if (row.action === "merge" && ids.size < 2) problems.push(`Row "${row.courseNodeId}" merges fewer than two concepts.`);
 		for (const [chatId, nodeId] of Object.entries(row.from)) {
 			if (!nodeSets.get(chatId)?.has(nodeId)) problems.push(`${chatId} has no node "${nodeId}".`);
-			const key = `${chatId}#${nodeId}`;
-			if (claimed.has(key)) problems.push(`${key} appears in two rows.`);
-			claimed.add(key);
+			const other = claimed.get(nodeId);
+			if (other && other !== row.courseNodeId) problems.push(`${nodeId} appears in two rows.`);
+			claimed.set(nodeId, row.courseNodeId);
 		}
 	}
 	return problems;
@@ -367,46 +314,44 @@ export function matchTableProblems(rows: readonly NodeMatchRow[], chats: Readonl
 
 /**
  * Apply a confirmed table: the combined map (edges carried over from each
- * chat, remapped; dropped nodes and their edges removed) and the aliases.
- * A "separate" row with several sources is split into one node per source.
+ * source, renamed through the merges; dropped nodes and their edges
+ * removed) and the concept merges the caller must run (server/concepts.ts).
  */
-export function mapFromMatches(rows: readonly NodeMatchRow[], chats: ReadonlyArray<{ chatId: string; tree: PlanTree | undefined }>, base?: PlanTree): { map: PlanTree; aliases: Record<string, string> } {
-	const aliases: Record<string, string> = {};
-	const nodes: PlanNode[] = [...(base?.nodes ?? [])];
-	const have = new Set(nodes.map((n) => n.id));
-	const add = (id: string, title: string, summary?: string) => {
-		if (have.has(id)) return;
-		have.add(id);
-		nodes.push({ id, title, ...(summary ? { summary } : {}) });
-	};
-	const titleOf = (chatId: string, nodeId: string) => chats.find((c) => c.chatId === chatId)?.tree?.nodes.find((n) => n.id === nodeId);
+export function mapFromMatches(rows: readonly NodeMatchRow[], sources: ReadonlyArray<{ chatId: string; tree: PlanTree | undefined }>, base?: PlanTree): { map: PlanTree; merges: Array<{ from: string; into: string }> } {
+	const rename = new Map<string, string>();
+	const dropped = new Set<string>();
+	const merges: Array<{ from: string; into: string }> = [];
 	for (const row of rows) {
-		if (row.action === "drop") continue;
-		const entries = Object.entries(row.from);
-		if (row.action === "separate" && entries.length > 1) {
-			entries.forEach(([chatId, nodeId], i) => {
-				const id = i === 0 ? row.courseNodeId : `${row.courseNodeId}-${i + 1}`;
-				const node = titleOf(chatId, nodeId);
-				add(id, node?.title ?? row.title, node?.summary);
-				aliases[`${chatId}#${nodeId}`] = id;
-			});
-			continue;
+		for (const nodeId of new Set(Object.values(row.from))) {
+			if (row.action === "drop") { dropped.add(nodeId); continue; }
+			rename.set(nodeId, row.courseNodeId);
+			if (nodeId !== row.courseNodeId && !merges.some((m) => m.from === nodeId)) merges.push({ from: nodeId, into: row.courseNodeId });
 		}
-		const first = entries[0] ? titleOf(entries[0][0], entries[0][1]) : undefined;
-		add(row.courseNodeId, row.title, first?.summary);
-		for (const [chatId, nodeId] of entries) aliases[`${chatId}#${nodeId}`] = row.courseNodeId;
 	}
-	const edges: PlanEdge[] = [...(base?.edges ?? [])];
-	const seen = new Set(edges.map((e) => `${e.from}>${e.to}`));
-	for (const { chatId, tree } of chats) {
+	const to = (id: string) => rename.get(id) ?? id;
+	const nodes: PlanNode[] = [];
+	const have = new Set<string>();
+	const add = (node: PlanNode) => {
+		const id = to(node.id);
+		if (dropped.has(node.id) || have.has(id)) return;
+		have.add(id);
+		const row = rows.find((r) => r.courseNodeId === id);
+		nodes.push({ ...node, id, ...(row ? { title: row.title } : {}) });
+	};
+	for (const node of base?.nodes ?? []) add(node);
+	for (const { tree } of sources) for (const node of tree?.nodes ?? []) add(node);
+	const edges: PlanEdge[] = [];
+	const seen = new Set<string>();
+	for (const tree of [base, ...sources.map((s) => s.tree)]) {
 		for (const edge of tree?.edges ?? []) {
-			const from = aliases[`${chatId}#${edge.from}`], to = aliases[`${chatId}#${edge.to}`];
-			if (!from || !to || from === to || seen.has(`${from}>${to}`)) continue;
-			seen.add(`${from}>${to}`);
-			edges.push({ from, to });
+			if (dropped.has(edge.from) || dropped.has(edge.to)) continue;
+			const from = to(edge.from), target = to(edge.to);
+			if (from === target || !have.has(from) || !have.has(target) || seen.has(`${from}>${target}`)) continue;
+			seen.add(`${from}>${target}`);
+			edges.push({ from, to: target });
 		}
 	}
-	return { map: { nodes, edges: dropCycles(nodes, edges), version: (base?.version ?? 0) + 1 }, aliases };
+	return { map: { nodes, edges: dropCycles(nodes, edges), version: (base?.version ?? 0) + 1 }, merges };
 }
 
 /** Merging two maps can create a cycle; drop the edges that close one (later edges first). */

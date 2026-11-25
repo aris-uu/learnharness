@@ -19,6 +19,7 @@ import { ComposerActions, NodePickerControl } from "@/components/composer-action
 import { OPENING_PROMPT_FAILURE } from "@/components/opening-prompt";
 import { SessionStarter } from "@/components/start-session";
 import { REVIEW_OPENING_PROMPT } from "@/components/review-prompt";
+import { DueEntry } from "@/components/start-review";
 import type { ChatSettings, GraphSnapshot } from "@/src/core";
 
 /** The draft's pick set (owner round 10): the SAME shape the home pick
@@ -195,6 +196,7 @@ export function DraftShell({
 											: "The teacher will open by probing what you already know."
 									}
 								/>
+								{mode === "teach" && <DueEntry className="-mt-6 mb-6" />}
 							</ConversationContent>
 						</Conversation>
 						<div className="h-24 bg-gradient-to-t from-background via-background/85 to-transparent" />

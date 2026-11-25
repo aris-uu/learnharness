@@ -1,13 +1,24 @@
 /**
- * THE MEMORY VIEW (retention mode, phase 1 — 2026-11-18): every math-mode
- * node with evidence, with its forgetting curve read now. Read only; a
- * pure body (props in, markup out) so it renders server-side and the
- * render suite can pin it. Design: docs/retention-mode-plan.md §6.
+ * THE MEMORY VIEW (retention mode, 2026-11-18; global concepts 2026-11-25):
+ * every math concept with attempts, its forgetting curve read now and its
+ * stage. A pure body (props in, markup out) so it renders server-side and
+ * the render suite can pin it; the row controls are client islands
+ * (memory-actions.tsx). Design: docs/retention-mode-plan.md §6,
+ * docs/global-concepts-plan.md §4.
  */
 import Link from "next/link";
 import type { MemoryView, MemoryViewItem } from "@/src/core";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { ConceptActions, ImplicitCreditToggle } from "@/components/memory-actions";
+
+const STAGE_LABEL = { learning: "learning", mature: "mature", relearning: "relearning" } as const;
+/** The stage column (C5): learning and relearning go to consolidation, mature to review. */
+export function stageLabel(item: Pick<MemoryViewItem, "stage" | "status" | "retired">): string {
+	if (item.retired) return "retired";
+	if (item.status === "unverified") return "unverified";
+	return STAGE_LABEL[item.stage];
+}
 
 const DAY_MS = 86_400_000;
 
@@ -41,6 +52,8 @@ export function MemoryTable({ view, filter, action }: { view: MemoryView; filter
 	const due = view.items.filter((item) => item.due).length;
 	const stale = view.items.filter((item) => item.stale).length;
 	const unverified = view.items.filter((item) => item.status === "unverified").length;
+	const toConsolidate = view.items.filter((item) => item.due && item.stage !== "mature").length;
+	const others = view.items.filter((item) => !item.retired).map((item) => ({ id: item.id, title: item.title }));
 	return (
 		<div className="mx-auto w-full max-w-5xl px-6 py-8" data-testid="memory-view">
 			<div className="flex items-center justify-between gap-4">
@@ -48,8 +61,9 @@ export function MemoryTable({ view, filter, action }: { view: MemoryView; filter
 				{action}
 			</div>
 			<p className="mt-1 text-sm text-muted-foreground">
-				{view.items.length} items from math-mode evidence · {due} due · {stale} stale (solid when taught, now below {Math.round(view.retention * 100)}%) · {unverified} only assumed
+				{view.items.length} concepts · {due} due ({toConsolidate} to consolidate, {due - toConsolidate} to review) · {stale} stale (solid when taught, now below {Math.round(view.retention * 100)}%) · {unverified} unverified
 			</p>
+			<div className="mt-2"><ImplicitCreditToggle on={view.implicitCredit} /></div>
 			<div className="mt-4 flex gap-1 text-xs uppercase tracking-wider">
 				{(["due", "all"] as const).map((f) => (
 					<Link key={f} href={f === "due" ? "/memory" : "/memory?show=all"} data-testid={`memory-filter-${f}`}
@@ -59,34 +73,39 @@ export function MemoryTable({ view, filter, action }: { view: MemoryView; filter
 				))}
 			</div>
 			{shown.length === 0 ? (
-				<p className="mt-8 text-sm text-muted-foreground">{view.items.length === 0 ? "No math-mode evidence yet." : "Nothing is due."}</p>
+				<p className="mt-8 text-sm text-muted-foreground">{view.items.length === 0 ? "No math-mode attempts yet." : "Nothing is due."}</p>
 			) : (
 				<table className="mt-4 w-full text-sm">
 					<thead>
 						<tr className="border-b text-left text-xs uppercase tracking-wider text-muted-foreground">
-							<th className="py-2 pr-3 font-normal">Node</th>
+							<th className="py-2 pr-3 font-normal">Concept</th>
+							<th className="py-2 pr-3 font-normal">Stage</th>
 							<th className="py-2 pr-3 font-normal">Recall now</th>
 							<th className="py-2 pr-3 font-normal">Curve</th>
 							<th className="py-2 pr-3 font-normal">Due</th>
 							<th className="py-2 pr-3 font-normal">Stability</th>
-							<th className="py-2 font-normal">Credited</th>
+							<th className="py-2 pr-3 font-normal">Credited</th>
+							<th className="py-2 font-normal"><span className="sr-only">Actions</span></th>
 						</tr>
 					</thead>
 					<tbody>
 						{shown.map((item) => (
-							<tr key={item.id} className="border-b border-border/50 align-middle" data-testid="memory-row">
+							<tr key={item.id} className={cn("border-b border-border/50 align-middle", item.retired && "opacity-50")} data-testid="memory-row">
 								<td className="py-2 pr-3">
 									<div>{item.title}</div>
-									<Link href={`/chat/${item.chatId}`} className="text-xs text-muted-foreground hover:text-foreground">{item.sessionTitle}</Link>
+									<div className="font-mono text-[10px] text-muted-foreground/70">{item.id}</div>
+									<Link href={`/chat/${item.chatId}`} className="text-xs text-muted-foreground hover:text-foreground">{item.sessionTitle}{item.chatIds.length > 1 ? ` +${item.chatIds.length - 1}` : ""}</Link>
 								</td>
+								<td className="py-2 pr-3 text-xs" data-testid="memory-stage">{stageLabel(item)}</td>
 								<td className="py-2 pr-3 font-mono tabular-nums">
-									{item.status === "unverified" ? <span className="text-muted-foreground">assumed</span> : `${Math.round(item.retrievability * 100)}%`}
+									{item.status === "unverified" ? <span className="text-muted-foreground">unverified</span> : `${Math.round(item.retrievability * 100)}%`}
 									{item.stale && <span className="ml-1 text-xs text-error">stale</span>}
 								</td>
 								<td className="py-2 pr-3"><RecallSparkline item={item} now={view.now} retention={view.retention} /></td>
 								<td className="py-2 pr-3 text-xs">{item.status === "unverified" ? "verify" : relativeDays(view.now, Date.parse(item.dueAt))}</td>
 								<td className="py-2 pr-3 font-mono text-xs tabular-nums">{item.daysTo90 != null ? `${item.daysTo90.toFixed(1)}d` : "—"}</td>
-								<td className="py-2 font-mono text-xs">{item.credited.join(" ") || "—"}</td>
+								<td className="py-2 pr-3 font-mono text-xs">{item.credited.join(" ") || "—"}</td>
+								<td className="py-2"><ConceptActions id={item.id} title={item.title} retired={item.retired} others={others.filter((o) => o.id !== item.id)} /></td>
 							</tr>
 						))}
 					</tbody>

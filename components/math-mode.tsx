@@ -14,7 +14,7 @@ export function readDraftMathMode(): boolean {
 	catch { return false; }
 }
 
-function writeDraftMathMode(on: boolean): void {
+export function writeDraftMathMode(on: boolean): void {
 	try {
 		if (on) window.localStorage.setItem(DRAFT_KEY, "1");
 		else window.localStorage.removeItem(DRAFT_KEY);
@@ -66,7 +66,7 @@ export function readDraftTimebox(): number | null {
 // keeps the continuesFrom link, and leaving it drops the link.
 const CONTINUE_DRAFT_KEY = "lh.continue-draft";
 
-export interface ContinueDraft { text: string; continuesFrom: string }
+export interface ContinueDraft { text: string; continuesFrom?: string }
 
 export function stashContinueDraft(draft: ContinueDraft): boolean {
 	try { globalThis.sessionStorage.setItem(CONTINUE_DRAFT_KEY, JSON.stringify(draft)); return true; }
@@ -80,7 +80,8 @@ export function takeContinueDraft(): ContinueDraft | null {
 		globalThis.sessionStorage.removeItem(CONTINUE_DRAFT_KEY);
 		if (!raw) return null;
 		const parsed = JSON.parse(raw) as Partial<ContinueDraft>;
-		return typeof parsed.text === "string" && typeof parsed.continuesFrom === "string" ? { text: parsed.text, continuesFrom: parsed.continuesFrom } : null;
+		if (typeof parsed.text !== "string") return null;
+		return { text: parsed.text, ...(typeof parsed.continuesFrom === "string" ? { continuesFrom: parsed.continuesFrom } : {}) };
 	} catch { return null; }
 }
 
@@ -284,6 +285,21 @@ export function ClosedSittingCard({ chatId, title, state, profile }: {
 			{error && <p role="alert" className="mt-2 text-sm text-destructive">Could not open the new session draft. Try again.</p>}
 		</div>
 	);
+}
+
+/**
+ * "Teach this" from a memory item (R2): a math-mode teach draft whose plan
+ * starts at the concept. Its id is global, so plan_init reuses it and the
+ * new sitting's first attempt on it is that concept's review.
+ */
+export function stashTeachDraft(concept: { id: string; title: string }): boolean {
+	writeDraftMathMode(true);
+	return stashContinueDraft({ text: `Teach me "${concept.title}" (concept \`${concept.id}\`) again. Start the plan at this concept: reuse its id, probe what I still have, and rebuild what is missing.` });
+}
+
+export function writeDraftConsolidate(on: boolean): void {
+	try { if (on) window.localStorage.setItem(DRAFT_CONSOLIDATE_KEY, "1"); else window.localStorage.removeItem(DRAFT_CONSOLIDATE_KEY); }
+	catch { /* page-only */ }
 }
 
 export function readDraftConsolidate(): boolean {

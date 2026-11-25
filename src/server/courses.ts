@@ -10,17 +10,17 @@ import {
 	type CoursePorts,
 } from "../core/course-ops.ts";
 import {
-	courseItemKeys, courseProgress, emptyCourse, mapFromMatches, matchTableProblems, proposeNodeMatches, reconstructedHandoff, upsertSitting,
+	courseProgress, emptyCourse, mapFromMatches, matchTableProblems, proposeNodeMatches, reconstructedHandoff, upsertSitting,
 	type CourseNodeView, type CourseRecord, type NodeMatchRow,
 } from "../core/course.ts";
 import { stores } from "./stores.ts";
+import { mergeConcepts } from "./concepts.ts";
 
 export function coursePorts(): CoursePorts {
 	return {
 		chatStore: stores.chatStore,
 		courseStore: stores.courseStore,
-		evidenceStore: stores.evidenceStore,
-		reviews: () => stores.reviewStore.list(),
+		mathStore: stores.mathStore,
 		weights: () => stores.fsrsWeightsStore.read(),
 	};
 }
@@ -150,8 +150,8 @@ export function proposeGroup(courseId: string | null, chatIds: readonly string[]
 /**
  * Apply a confirmed matching table: chats already in another course move
  * (their old course loses them), every adopted chat becomes a sitting in
- * date order, aliases map each old node onto its course node. Never edits
- * evidence, reviews or the adopted chats' messages.
+ * date order, and every merge row merges its concepts for good
+ * (server/concepts.ts: attempts, graph, chats and courses are rewritten).
  */
 export function applyGroup(input: { courseId: string | null; chatIds: readonly string[]; rows: readonly NodeMatchRow[]; title?: string }): CourseRecord {
 	const ports = coursePorts();
@@ -162,10 +162,8 @@ export function applyGroup(input: { courseId: string | null; chatIds: readonly s
 	];
 	const problems = matchTableProblems(input.rows, sources);
 	if (problems.length) throw new CourseGroupError(problems.join(" "));
-	// The existing course map is the base: its nodes keep their ids, and its own entries alias nothing.
-	const merged = mapFromMatches(input.rows, sources, existing?.map);
-	const map = merged.map;
-	const aliases = Object.fromEntries(Object.entries(merged.aliases).filter(([key]) => !existing || !key.startsWith(`${existing.id}#`)));
+	// The existing course map is the base: its nodes keep their ids.
+	const { map, merges } = mapFromMatches(input.rows, sources, existing?.map);
 	const now = new Date().toISOString();
 	// Move chats out of other courses first.
 	for (const chat of chats) {
@@ -173,7 +171,7 @@ export function applyGroup(input: { courseId: string | null; chatIds: readonly s
 		if (other && other.id !== existing?.id) ungroupChat(ports, other.id, chat.id);
 	}
 	let course: CourseRecord = existing ?? emptyCourse({ title: input.title?.trim() || chats[0]!.title, nowIso: now });
-	course = { ...course, map, aliases: { ...course.aliases, ...aliases }, updatedAt: now };
+	course = { ...course, map, updatedAt: now };
 	if (input.title?.trim()) course = { ...course, title: input.title.trim() };
 	for (const chat of [...chats].sort((a, b) => a.createdAt.localeCompare(b.createdAt))) {
 		const source = sourceFromChat(chat);
@@ -181,8 +179,8 @@ export function applyGroup(input: { courseId: string | null; chatIds: readonly s
 		let sitting = sittingFromChat(chat);
 		if (!sitting.handoff && (chat.kind ?? "teach") === "teach") {
 			// §9.1 step 4, per adopted teach chat: a reconstructed hand-off.
-			const keys = courseItemKeys([course]);
-			const nodes = new Set((chat.tree?.nodes ?? []).map((n) => keys.key(chat.id, n.id).nodeId));
+			const rename = new Map(merges.map((m) => [m.from, m.into]));
+			const nodes = new Set((chat.tree?.nodes ?? []).map((n) => rename.get(n.id) ?? n.id));
 			const views = courseViews(ports, course).filter((v) => nodes.has(v.id));
 			sitting = { ...sitting, handoff: reconstructedHandoff({ title: chat.title, views }), handoffSource: "reconstructed" };
 		}
@@ -190,5 +188,7 @@ export function applyGroup(input: { courseId: string | null; chatIds: readonly s
 	}
 	stores.courseStore.save(course);
 	for (const chat of chats) stores.chatStore.saveSettings(chat.id, { ...stores.chatStore.getChat(chat.id)?.settings, courseId: course.id });
-	return course;
+	// The confirmed merges, for good: one concept per idea, no alias table.
+	for (const merge of merges) mergeConcepts(merge.from, merge.into, { reason: `course grouping (${course.id})` });
+	return stores.courseStore.get(course.id) ?? course;
 }

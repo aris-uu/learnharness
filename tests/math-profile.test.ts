@@ -22,6 +22,7 @@ import { pastedImageExtension, savePastedImage } from "../src/server/pasted-imag
 import { allSegmentPaths, effectiveProfileSegments } from "../src/agent/prompt-segments.ts";
 import { isValidSegmentPath } from "../src/core/prompt-segments.ts";
 import { promptOverrides } from "../src/store/prompt-overrides.ts";
+import { attempt, concept, graphOf, memoryMathStore } from "./math-store-fixture.ts";
 
 const tree = {
 	nodes: [{ id: "a", title: "A" }, { id: "b", title: "B" }, { id: "c", title: "C" }],
@@ -81,7 +82,7 @@ describe("mastery evidence", () => {
 	});
 	it("gates forward moves but never staying or going back", () => {
 		assert.deepEqual(blockingPrerequisites(tree, "b", "a", []), ["a"]);
-		assert.deepEqual(blockingPrerequisites(tree, "b", "a", [entry("a", "K", "assumed")]), []);
+		assert.deepEqual(blockingPrerequisites(tree, "b", "a", [], (id) => id === "a"), [], "established on the global record");
 		assert.deepEqual(blockingPrerequisites(tree, "b", "a", [entry("a", "K", "learner_override")]), []);
 		assert.deepEqual(blockingPrerequisites(tree, "a", "c", []), [], "going back");
 		assert.deepEqual(blockingPrerequisites(tree, "c", "c", []), [], "staying");
@@ -140,9 +141,23 @@ describe("math tools", () => {
 		const tools = createTeacherTools(ctx, undefined, "math");
 		const refused = await tools.record_evidence!.execute("r1", { nodeId: "a", dimension: "K", outcome: "correct", hints: 0, note: "n" });
 		assert.match(JSON.stringify(refused), /written attempt/);
-		await tools.record_evidence!.execute("r2", { nodeId: "a", dimension: "K", outcome: "assumed", hints: 0, note: "solid in an earlier session", basisSession: "old" });
+		await tools.record_evidence!.execute("r2", { nodeId: "a", dimension: "K", outcome: "learner_override", hints: 0, note: "learner asked to move on" });
 		const passed = await tools.explain!.execute("z", { ...explainArgs, nodeId: "b", conceal: true });
 		assert.doesNotMatch(JSON.stringify(passed), /Mastery gate/);
+	});
+	it("passes a prerequisite that an earlier session established and that is still fresh", async () => {
+		const hourAgo = new Date(Date.now() - 3_600_000).toISOString();
+		const mathStore = memoryMathStore({
+			graph: graphOf([concept("a"), concept("b")], [{ from: "a", to: "b" }]),
+			attempts: [attempt("a", hourAgo, { dimension: "K" }), attempt("a", hourAgo, { dimension: "U" })],
+		});
+		const globalCtx = { chatId: "c", chatStore: { getChat: () => chat }, jobStore: {}, spawn: () => {}, searchAvailable: () => false, mathStore } as never;
+		const tools = createTeacherTools(globalCtx, undefined, "math");
+		const passed = await tools.explain!.execute("g1", { ...explainArgs, nodeId: "b", conceal: true });
+		assert.doesNotMatch(JSON.stringify(passed), /Mastery gate/);
+		const draft = memoryMathStore({ graph: graphOf([concept("a"), concept("b", { scopeDraft: true })], [{ from: "a", to: "b" }]), attempts: mathStore.attempts() });
+		const draftTools = createTeacherTools({ ...(globalCtx as object), mathStore: draft } as never, undefined, "math");
+		assert.match(JSON.stringify(await draftTools.explain!.execute("g2", { ...explainArgs, nodeId: "b", conceal: true })), /update_concept/, "a draft scope is confirmed before quizzing");
 	});
 	it("credits a node from this session's probe answer, and only from an answered written one", async () => {
 		const probe = { messages: [
@@ -158,7 +173,7 @@ describe("math tools", () => {
 		const credited = await tools.record_evidence!.execute("e2", { ...entry, probeAnswer: "p1" });
 		assert.equal((credited as { details: { ok?: boolean } }).details.ok, true);
 	});
-	it("never records this session's probe as assumed, and lists the probe ids to cite instead", async () => {
+	it("has no assumed outcome, and lists the probe ids to cite instead", async () => {
 		const probe = { messages: [
 			{ role: "assistant", content: [{ type: "toolCall", id: "p1", name: "recall", arguments: { question: "State Lagrange's theorem" } }] },
 			{ role: "toolResult", toolCallId: "p1", toolName: "recall", content: [{ type: "text", text: JSON.stringify({ text: "the statement" }) }] },
@@ -167,15 +182,10 @@ describe("math tools", () => {
 		const tools = createTeacherTools(probeCtx, undefined, "math");
 		const assumed = { nodeId: "a", dimension: "K", outcome: "assumed", hints: 0, note: "Probe this session: stated it unaided" };
 		const text = async (id: string, input: object) => JSON.stringify(await tools.record_evidence!.execute(id, input));
-		const noBasis = await text("a1", assumed);
-		assert.match(noBasis, /needs basisSession/);
-		assert.match(noBasis, /p1: State Lagrange's theorem/, "the refusal names the probe question to cite");
-		assert.match(await text("a2", { ...assumed, basisSession: "c" }), /this session/);
-		assert.match(await text("a3", { ...assumed, basisSession: "old", probeAnswer: "p1" }), /never assumed/);
-		assert.match(await text("a4", { ...assumed, outcome: "correct", basisSession: "old" }), /basisSession belongs to assumed only/);
-		assert.match(await text("a5", { ...assumed, outcome: "correct" }), /p1: State Lagrange's theorem/, "a refused credit also lists the ids");
-		const fromEarlier = await tools.record_evidence!.execute("a6", { ...assumed, note: "solid in old", basisSession: "old" });
-		assert.equal((fromEarlier as { details: { ok?: boolean } }).details.ok, true);
+		assert.match(await text("a1", assumed), /isError":true/, "assumed is not an outcome");
+		assert.match(await text("a5", { ...assumed, outcome: "correct" }), /p1: State Lagrange's theorem/, "a refused credit lists the probe ids");
+		const credited = await tools.record_evidence!.execute("a6", { ...assumed, outcome: "correct", probeAnswer: "p1" });
+		assert.equal((credited as { details: { ok?: boolean } }).details.ok, true);
 	});
 	it("hides a concealed answer on the card", () => {
 		const answer = { kind: "explain" } as QuestionAnswerData;

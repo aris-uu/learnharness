@@ -13,7 +13,7 @@ import { fitWeights, type FitResult } from "../core/memory/fit.ts";
 import type { FsrsWeights, FsrsWeightsStore, TrainingReview } from "../core/memory/fsrs.ts";
 import { writeFileAtomicSync } from "./atomic-write.ts";
 
-export const FSRS_WEIGHTS_FILE = path.join(/* turbopackIgnore: true */ PATHS.data, "memory", "fsrs-weights.json");
+export const FSRS_WEIGHTS_FILE = path.join(/* turbopackIgnore: true */ PATHS.data, "math", "fsrs-weights.json");
 
 export interface FsrsWeightsRecord {
 	version: "FSRS-7";

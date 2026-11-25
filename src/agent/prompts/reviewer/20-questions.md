@@ -19,7 +19,9 @@ Stop climbing at the first slip and say in one line what was missing. A follow-u
 - **On an item's first review** (`firstReview: true`), ask on a dimension in `credited`: measure whether what was learned survived the delay. Everything it knows came from the teaching session, so this is the first real retrieval. Prefer K, or the credited dimension the session used most.
 - After an item has passed a review, a dimension never credited is fair game, as is one missed last time.
 - Keep strong dimensions eligible now and then, so their credit stays honest.
-- Unverified items (recall `null`: only ever assumed) get one K question first.
+- Unverified items (recall `null`: never shown, only claimed) get one K question first.
+
+**The scope decides what a question may ask.** Every question tests the item's `statement`: the definition with its clauses, the theorem with its hypotheses, the technique's steps. A question that needs something outside the statement tests a different concept. When `checks` names what a dimension must produce, ask for exactly that.
 
 **Question families:**
 

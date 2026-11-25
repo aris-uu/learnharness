@@ -23,7 +23,24 @@ graph/coverage.jsonl       Extraction fingerprints, NOT learner assessment
 graph/positions.json      Canvas layout, not semantic relationships
 graph/render-settings.json  Presentation preferences, not learning evidence
 jobs/<job-id>.json        Background work records; delivered artifacts also appear in sessions
+courses/<course-id>.json  Course records grouping several sessions (format 2)
+math/concepts.json        Math mode: the global concept graph (ids, scope, prerequisite edges)
+math/attempts.jsonl       Math mode: every graded attempt (teach, probe, review, consolidate)
+math/unverified.jsonl     Math mode: claims nobody tested; never credit
+math/merges.jsonl         Math mode: concept merges, applied by rewriting every reference
+math/options.json         Math mode switches (e.g. implicitCredit)
+math/fsrs-weights.json    Fitted forgetting-curve weights; derived, safe to ignore
 ```
+
+In math mode a plan node id **is** a global concept id: the same id in two
+sessions is the same idea, and its attempts across sessions form one record.
+Each concept stores its scope (`kind`, `statement`, `checks`); `scopeDraft: true`
+means the scope was written by the migration and not yet confirmed by a tutor.
+Attempts carry `source`, `role` (`attempt`, `retry`, `followup`, `check`) and a
+stored `rating` (1–4). Only the first graded attempt on a concept in a sitting
+moves its schedule; schedules are derived on read, never stored. Older data
+folders had `evidence/evidence.jsonl` and `memory/reviews.jsonl` instead; those
+were migrated into `math/` on 2026-11-25.
 
 `settings.json`, downloaded models, caches, and provider debug logs are not needed
 to interpret learning history. `auth.json` is normally one directory above data;

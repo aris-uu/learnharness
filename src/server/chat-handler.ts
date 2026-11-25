@@ -761,7 +761,7 @@ export async function handleChatInput(
 		? buildAgent({ ...agentOpts, teaching })
 		: record.kind === "review"
 			? createReviewerAgent(
-					{ chatId, chatStore: stores.chatStore, evidenceStore: stores.evidenceStore, reviewStore: stores.reviewStore, weightsStore: stores.fsrsWeightsStore, courseStore: stores.courseStore },
+					{ chatId, chatStore: stores.chatStore, mathStore: stores.mathStore, weightsStore: stores.fsrsWeightsStore, courseStore: stores.courseStore },
 					agentOpts,
 				)
 		: record.kind === "practice"
@@ -798,8 +798,7 @@ export async function handleChatInput(
 						// The registry drop's signal (2026-09-20): no live engine
 						// = no research tool in the teacher's registry.
 						searchAvailable,
-						evidenceStore: stores.evidenceStore,
-						reviewStore: stores.reviewStore,
+						mathStore: stores.mathStore,
 						weightsStore: stores.fsrsWeightsStore,
 						courseStore: stores.courseStore,
 					},
@@ -820,8 +819,7 @@ export async function handleChatInput(
 						// knowledge graph through tools when the gate opens —
 						// graph master switch AND the agent.graphTools toggle.
 						...(graphToolsEnabled(effective) ? { graphStore: stores.graphStore } : {}),
-						evidenceStore: stores.evidenceStore,
-						reviewStore: stores.reviewStore,
+						mathStore: stores.mathStore,
 						weightsStore: stores.fsrsWeightsStore,
 						courseStore: stores.courseStore,
 					},

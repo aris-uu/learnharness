@@ -9,6 +9,7 @@ import { isTurnRunning } from "./turn-liveness.ts";
 import { clearTurnFailure } from "./turn-runs.ts";
 import { discardChatDeliveries } from "./jobs.ts";
 import { sideChats } from "./side-chat.ts";
+import { referencedConcepts } from "./concepts.ts";
 
 /**
  * Server-side chat entries for the transport layer (app/api/chats*,
@@ -174,9 +175,8 @@ function finishChatDeletion(chatId: string, mode: ChatDeleteMode): Extract<ChatD
 
 function finishChatRecordDeletion(chatId: string): number {
 	const jobsRemoved = stores.jobStore.deleteJobsForChat(chatId);
-	// The global evidence ledger is a copy of this record's evidence: it goes first.
-	stores.evidenceStore.removeChat(chatId);
-	stores.reviewStore.removeChat(chatId);
+	// The chat's attempts go from the global math record, and the concepts only it created.
+	stores.mathStore.removeChat(chatId, referencedConcepts(chatId));
 	if (stores.chatStore.deleteChat(chatId)) {
 		discardChatDeliveries(chatId);
 		clearTurnFailure(chatId);

@@ -32,3 +32,6 @@ xai-credentials.json*
 
 # local Claude Code launch config
 .claude/
+
+# Personal concept map used once by scripts/migrate-global-concepts.ts (holds learner data).
+scripts/migration/concept-map.json

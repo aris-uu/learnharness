@@ -1,62 +1,19 @@
 /**
- * Review sessions (retention mode, phase 2): the review log's record shape,
- * the grade → FSRS rating table, and the ranking of due items. The log is
- * the only stored state; schedules are replayed from it on every read
- * (items.ts). Design: docs/retention-mode-plan.md §3, §5, §6.
+ * Review and consolidation sittings: the grade → FSRS rating table, the
+ * ranking of due concepts, consolidation clusters and the retry queue. The
+ * attempt log is the only stored state; schedules are replayed from it on
+ * every read (items.ts). Design: docs/retention-mode-plan.md §5–§6,
+ * docs/consolidation-sessions-plan.md §4, docs/global-concepts-plan.md.
  */
-import { MATH_DIMENSIONS, MATH_HABITS, type EvidenceRecord, type MathDimension, type MathHabit, type MathOutcome } from "../math-evidence.ts";
-import type { PlanEdge } from "../contracts/plan.ts";
+import type { MathDimension, MathHabit, MathOutcome } from "../math-evidence.ts";
+import { dependentsOf, prerequisitesOf, type Attempt, type ConceptGraph } from "../math-concepts.ts";
 import type { FsrsRating } from "./fsrs.ts";
-import { itemKeys, memoryStage, type MemoryEvent, type MemoryItemSnapshot, type MemoryStage } from "./items.ts";
-import type { ItemKeyResolver } from "../course.ts";
+import type { MemoryItemSnapshot, MemoryStage } from "./items.ts";
 
 export const REVIEW_OUTCOMES = ["correct", "correct_slow", "partial", "incorrect"] as const satisfies readonly MathOutcome[];
 export type ReviewOutcome = (typeof REVIEW_OUTCOMES)[number];
 
 export const RATING_LABELS: Record<FsrsRating, string> = { 1: "Again", 2: "Hard", 3: "Good", 4: "Easy" };
-
-/** One graded review attempt (data/memory/reviews.jsonl). Only `review`
- *  events move the schedule; a `retry` (a later attempt on the same item in
- *  the same session) is logged for the record but never replayed. */
-export interface ReviewEvent extends MemoryEvent {
-	/** review: the first attempt, moves the schedule. retry: after an Again.
-	 *  followup: a harder rung after a clean answer (the easy-to-hard ladder);
-	 *  a failed one caps the first attempt (items.ts capByFollowUps).
-	 *  check: logged only, never the retry: see `check`. */
-	kind: "review" | "retry" | "followup" | "check";
-	/** For kind check: "repair" = the learner's rebuild right after a repair;
-	 *  "close" = the sitting's blank-page retrieval on this item. */
-	check?: ReviewCheck;
-	/** The record_review tool-call id. */
-	id: string;
-	/** The review session it happened in. */
-	chatId: string;
-	dimension: MathDimension;
-	outcome: ReviewOutcome;
-	hints: number;
-	loadBearing?: boolean;
-	confidence?: number;
-	elapsedSeconds?: number;
-	expectedSeconds?: number;
-	/** What was asked, so the next review can avoid repeating it. */
-	question: string;
-	note: string;
-	habits?: MathHabit[];
-	/** Active minutes into the sitting (session-clock.ts minutesIntoSitting). */
-	minutesIn?: number;
-	/** Recall probability the schedule predicted just before this attempt. */
-	predicted?: number;
-	/** The learner said the item was never consolidated: no retry, it needs teaching. */
-	noRetry?: boolean;
-}
-
-/** Port for the review log (fs adapter: src/store/memory.ts). */
-export interface ReviewStore {
-	list(): ReviewEvent[];
-	append(event: ReviewEvent): void;
-	/** Drop the events made in `chatId`, and those on items it seeded. */
-	removeChat(chatId: string): number;
-}
 
 export const REVIEW_CHECKS = ["repair", "close"] as const;
 export type ReviewCheck = (typeof REVIEW_CHECKS)[number];
@@ -73,8 +30,7 @@ export interface RatingInput {
 /**
  * The grade → rating table (plan §5). The server, not the tutor, decides the
  * rating, so the mapping is auditable and the same in every session.
- * A partial without `loadBearing: false` counts as Again: missing the step
- * that carries the argument is a failed retrieval.
+ * A partial without `loadBearing: false` counts as Again.
  */
 export function ratingFor(input: RatingInput): FsrsRating {
 	const { outcome, hints } = input;
@@ -85,25 +41,7 @@ export function ratingFor(input: RatingInput): FsrsRating {
 	return (input.confidence ?? 0) >= 90 && fast ? 4 : 3;
 }
 
-export function isReviewEvent(value: unknown): value is ReviewEvent {
-	const r = value as Record<string, unknown> | null;
-	const optionalNumber = (v: unknown) => v === undefined || (typeof v === "number" && Number.isFinite(v));
-	return !!r && typeof r === "object" &&
-		typeof r.id === "string" && typeof r.itemId === "string" && typeof r.chatId === "string" &&
-		typeof r.at === "string" && Number.isFinite(Date.parse(r.at)) &&
-		(r.kind === "review" || r.kind === "retry" || r.kind === "followup" || r.kind === "check") &&
-		(r.check === undefined || (REVIEW_CHECKS as readonly unknown[]).includes(r.check)) &&
-		[1, 2, 3, 4].includes(r.rating as number) &&
-		(MATH_DIMENSIONS as readonly unknown[]).includes(r.dimension) &&
-		(REVIEW_OUTCOMES as readonly unknown[]).includes(r.outcome) &&
-		typeof r.hints === "number" && typeof r.question === "string" && typeof r.note === "string" &&
-		(r.loadBearing === undefined || typeof r.loadBearing === "boolean") && (r.noRetry === undefined || typeof r.noRetry === "boolean") &&
-		optionalNumber(r.confidence) && optionalNumber(r.elapsedSeconds) && optionalNumber(r.expectedSeconds) && optionalNumber(r.predicted) && optionalNumber(r.minutesIn) &&
-		(r.habits === undefined || (Array.isArray(r.habits) && r.habits.every((tag) => (MATH_HABITS as readonly unknown[]).includes(tag))));
-}
-
-/** A review session's title: dated, numbered from the second one that day
- *  (owner, 2026-11-18: several review sessions a day). */
+/** A review session's title: dated, numbered from the second one that day. */
 export function reviewTitle(nowMs: number, existingTitles: readonly string[] = [], prefix = "Review"): string {
 	const base = `${prefix} ${new Date(nowMs).toISOString().slice(0, 10)}`;
 	const taken = new Set(existingTitles);
@@ -113,74 +51,71 @@ export function reviewTitle(nowMs: number, existingTitles: readonly string[] = [
 	return `${base} (${n})`;
 }
 
-/** A due item as `due_items` hands it to the tutor. */
+/** Which sittings take which stage: review the mature, consolidation the rest. */
+export const stagesFor = (consolidate: boolean): ReadonlySet<MemoryStage> => new Set(consolidate ? ["learning", "relearning"] : ["mature"]);
+
+/** A due concept as `due_items` hands it to the tutor. */
 export interface ReviewCandidate {
 	itemId: string;
 	title: string;
-	summary?: string;
+	kind: string;
+	/** What a question must test (the concept's scope). */
+	statement: string;
+	checks?: Partial<Record<MathDimension, string>>;
+	/** The statement is a migration draft: confirm it with update_concept before asking. */
+	scopeDraft?: true;
+	stage: MemoryStage;
 	session: string;
-	/** Recall probability now (null: only ever assumed, never shown). */
 	recall: number | null;
 	daysOverdue: number;
-	/** Days from the last review until recall falls to 90% (null: no schedule). */
 	stability: number | null;
 	credited: MathDimension[];
-	/** The last few attempts on this item, newest first, so no question repeats. */
+	/** The last few attempts, newest first, so no question repeats. */
 	history: Array<{ at: string; dimension: MathDimension; outcome: string; question?: string; note: string }>;
 	habits: MathHabit[];
-	/** Direct prerequisites (same teaching session) that are also due. */
+	/** Direct prerequisites (global graph) that are also due. */
 	duePrereqs: string[];
-	/** Faded: solid when taught but now below target, or recall under 0.7. Start at the easiest rung. */
 	stale: boolean;
 	recentAgain: boolean;
-	/** No review event yet: everything known comes from the teaching session. */
 	firstReview: boolean;
 }
 
 const DAY_MS = 86_400_000;
-/** Below this recall an item counts as faded whatever its teaching status. */
 const STALE_RECALL = 0.7;
 /** How many harder rungs may follow a clean answer on one item in a session. */
 export const MAX_FOLLOW_UPS = 2;
 
 /**
- * The due items, ranked for the tutor to pick from (plan §6): shown items
- * before assumed ones, prerequisites of other due items first, then lowest
+ * The due concepts, ranked for the tutor to pick from: shown items before
+ * unverified ones, prerequisites of other due items first, then lowest
  * recall, then a recent Again.
  */
 export function reviewCandidates(input: {
 	snapshot: readonly MemoryItemSnapshot[];
-	records: readonly EvidenceRecord[];
-	reviews: readonly ReviewEvent[];
-	/** Each teaching session's plan edges, for prerequisites (a course id gives the course map's). */
-	edgesOf: (chatId: string) => readonly PlanEdge[];
-	/** Which item a (chat, node) pair counts toward; defaults to the configured course resolver. */
-	keys?: ItemKeyResolver;
+	attempts: readonly Attempt[];
+	graph: ConceptGraph;
 	sessionTitle: (chatId: string) => string;
 	nowMs: number;
 	limit?: number;
-	/** Only items at this stage: review takes mature items, consolidation the rest. */
-	stage?: MemoryStage;
+	stages?: ReadonlySet<MemoryStage>;
 }): ReviewCandidate[] {
-	const keys = input.keys ?? itemKeys();
-	const due = input.snapshot.filter((item) => item.due && (!input.stage || memoryStage(item) === input.stage));
+	const due = input.snapshot.filter((item) => item.due && (!input.stages || input.stages.has(item.stage)));
 	const dueIds = new Set(due.map((item) => item.id));
-	const candidates = due.map((item): ReviewCandidate & { prereqOfDue: boolean; unverified: boolean } => {
-		const owner = item.courseId ?? item.chatId;
-		const edges = input.edgesOf(owner);
-		const ownReviews = input.reviews.filter((r) => keys.itemId(r.itemId) === item.id);
-		const evidence = input.records.filter((r) => keys.key(r.chatId, r.nodeId).id === item.id);
-		const history = [
-			...ownReviews.map((r) => ({ at: r.at, dimension: r.dimension, outcome: r.outcome, question: r.question, note: r.note })),
-			...evidence.filter((r) => r.outcome !== "assumed" && r.outcome !== "learner_override").map((r) => ({ at: r.recordedAt, dimension: r.dimension, outcome: r.outcome, note: r.note })),
-		].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).slice(0, 3);
-		const habits = [...new Set([...evidence.flatMap((r) => r.habits ?? []), ...ownReviews.flatMap((r) => r.habits ?? [])])];
-		const lastReview = ownReviews.filter((r) => r.kind === "review").at(-1);
-		const sameChat = (nodeId: string) => `${owner}#${nodeId}`;
-		return {
+	const candidates = due.map((item) => {
+		const own = input.attempts.filter((a) => a.conceptId === item.id && !a.implicit && a.outcome !== "learner_override");
+		const history = own.map((a) => ({ at: a.at, dimension: a.dimension, outcome: a.outcome, ...(a.question ? { question: a.question } : {}), note: a.note }))
+			.sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).slice(0, 3);
+		const habits = [...new Set(own.flatMap((a) => a.habits ?? []))];
+		const lastReview = item.events.filter((e) => e.kind === "review").at(-1);
+		const concept = input.graph.concepts[item.id];
+		const candidate: ReviewCandidate & { prereqOfDue: boolean; unverified: boolean } = {
 			itemId: item.id,
 			title: item.title,
-			...(item.summary ? { summary: item.summary } : {}),
+			kind: item.kind,
+			statement: item.statement,
+			...(concept?.checks ? { checks: concept.checks } : {}),
+			...(item.scopeDraft ? { scopeDraft: true as const } : {}),
+			stage: item.stage,
 			session: input.sessionTitle(item.chatId),
 			recall: item.state ? Math.round(item.retrievability * 100) / 100 : null,
 			daysOverdue: Math.max(0, Math.round(((input.nowMs - Date.parse(item.dueAt)) / DAY_MS) * 10) / 10),
@@ -188,13 +123,14 @@ export function reviewCandidates(input: {
 			credited: item.credited,
 			history,
 			habits,
-			duePrereqs: edges.filter((e) => e.to === item.nodeId && dueIds.has(sameChat(e.from))).map((e) => sameChat(e.from)),
+			duePrereqs: prerequisitesOf(input.graph, item.id).filter((id) => dueIds.has(id)),
 			recentAgain: lastReview?.rating === 1,
 			stale: item.stale || (item.state ? item.retrievability < STALE_RECALL : false),
-			firstReview: !ownReviews.some((r) => r.kind === "review"),
-			prereqOfDue: edges.some((e) => e.from === item.nodeId && dueIds.has(sameChat(e.to))),
+			firstReview: !item.events.some((e) => e.kind === "review"),
+			prereqOfDue: dependentsOf(input.graph, item.id).some((id) => dueIds.has(id)),
 			unverified: !item.state,
 		};
+		return candidate;
 	});
 	candidates.sort((a, b) =>
 		Number(a.unverified) - Number(b.unverified) ||
@@ -205,51 +141,103 @@ export function reviewCandidates(input: {
 	return candidates.slice(0, input.limit ?? 15).map(({ prereqOfDue: _p, unverified: _u, ...candidate }) => candidate);
 }
 
-/** Plan-map slugs for picked items: the node's own slug, suffixed when two
- *  picked items share one. Deterministic, so the transcript re-derives it. */
-export function reviewNodeIds(itemIds: readonly string[]): Map<string, string> {
-	const out = new Map<string, string>();
-	const used = new Set<string>();
-	for (const itemId of itemIds) {
-		const raw = itemId.slice(itemId.indexOf("#") + 1).toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "item";
-		let slug = raw;
-		for (let n = 2; used.has(slug); n++) slug = `${raw}-${n}`;
-		used.add(slug);
-		out.set(slug, itemId);
-	}
-	return out;
+/** One consolidation cluster: a seed concept and the concepts studied with it. */
+export interface ConsolidationCluster {
+	seed: string;
+	/** In study order: prerequisites first, then the seed, then confusable / same-topic neighbours. */
+	itemIds: string[];
+	/** Mature prerequisites pulled in as warm-ups (asked as follow-ups: they never move their schedule). */
+	warmUps: string[];
+	reasons: Record<string, string>;
 }
 
-/** How many other items a retry waits behind after an Again, so it tests retrieval, not the repair still in working memory. */
+/** How long a recent Again on a neighbour keeps counting as interference. */
+const RECENT_AGAIN_DAYS = 7;
+
+/**
+ * Consolidation clusters (consolidation plan §4, C1): take the most overdue
+ * learning/relearning concept, add its due prerequisites and dependents, its confusable
+ * concepts, and concepts from the same source sitting that failed recently;
+ * a mature prerequisite joins as a warm-up. Repeat until `capacity` items
+ * are placed. Deterministic.
+ */
+export function consolidationClusters(input: {
+	candidates: readonly ReviewCandidate[];
+	snapshot: readonly MemoryItemSnapshot[];
+	graph: ConceptGraph;
+	capacity: number;
+	nowMs: number;
+}): ConsolidationCluster[] {
+	const byId = new Map(input.snapshot.map((s) => [s.id, s]));
+	const candidateIds = new Set(input.candidates.map((c) => c.itemId));
+	const placed = new Set<string>();
+	const clusters: ConsolidationCluster[] = [];
+	const order = [...input.candidates].sort((a, b) => b.daysOverdue - a.daysOverdue || (a.recall ?? 0) - (b.recall ?? 0));
+	const recentAgain = (id: string) => byId.get(id)?.events.some((e) => e.rating === 1 && input.nowMs - Date.parse(e.at) < RECENT_AGAIN_DAYS * DAY_MS) ?? false;
+	let count = 0;
+	for (const seed of order) {
+		if (count >= input.capacity) break;
+		if (placed.has(seed.itemId)) continue;
+		const reasons: Record<string, string> = { [seed.itemId]: "most overdue" };
+		const itemIds: string[] = [];
+		const warmUps: string[] = [];
+		for (const pre of prerequisitesOf(input.graph, seed.itemId)) {
+			if (placed.has(pre)) continue;
+			if (candidateIds.has(pre)) { itemIds.push(pre); reasons[pre] = `due prerequisite of ${seed.itemId}`; }
+			else if (byId.get(pre)?.stage === "mature") { warmUps.push(pre); reasons[pre] = `mature prerequisite of ${seed.itemId}: warm-up`; }
+		}
+		itemIds.push(seed.itemId);
+		// A due dependent is studied right after its prerequisite.
+		for (const dep of dependentsOf(input.graph, seed.itemId)) {
+			if (candidateIds.has(dep) && !placed.has(dep) && !itemIds.includes(dep)) { itemIds.push(dep); reasons[dep] = `due dependent of ${seed.itemId}`; }
+		}
+		const seedItem = byId.get(seed.itemId);
+		const neighbours = new Set<string>(input.graph.concepts[seed.itemId]?.confusableWith ?? []);
+		for (const c of Object.values(input.graph.concepts)) if (c.confusableWith?.includes(seed.itemId)) neighbours.add(c.id);
+		for (const id of neighbours) if (candidateIds.has(id) && !placed.has(id) && !itemIds.includes(id)) { itemIds.push(id); reasons[id] = `easily confused with ${seed.itemId}`; }
+		for (const other of input.candidates) {
+			const o = byId.get(other.itemId);
+			if (!o || placed.has(o.id) || itemIds.includes(o.id) || !seedItem) continue;
+			if (o.chatIds.some((c) => seedItem.chatIds.includes(c)) && recentAgain(o.id)) { itemIds.push(o.id); reasons[o.id] = `same source sitting, failed recently`; }
+		}
+		const room = Math.max(1, input.capacity - count);
+		const kept = itemIds.slice(0, room);
+		if (!kept.includes(seed.itemId)) kept[kept.length - 1] = seed.itemId;
+		for (const id of kept) placed.add(id);
+		for (const id of warmUps) placed.add(id);
+		count += kept.length;
+		clusters.push({ seed: seed.itemId, itemIds: kept, warmUps, reasons: Object.fromEntries(Object.entries(reasons).filter(([id]) => kept.includes(id) || warmUps.includes(id))) });
+	}
+	return clusters;
+}
+
+/** How many other items a retry waits behind after an Again. */
 export const RETRY_GAP = 2;
 
 export interface RetryQueue {
-	/** Items rated Again whose retry has not been asked yet and should wait. */
 	waiting: string[];
-	/** Items rated Again whose retry is due now: they have waited RETRY_GAP items, or nothing else is left. */
 	ready: string[];
-	/** Picked items with no first attempt yet, in pick order. */
 	remaining: string[];
 }
 
 /**
- * The session's deferred retries (owner, 2026-11-18: interleave before
+ * The sitting's deferred retries (owner, 2026-11-18: interleave before
  * retrying). An Again is repaired at once, but its retry waits until
- * RETRY_GAP other items have had their first attempt, or until no first
- * attempts remain, so the retry measures retrieval after a delay.
+ * RETRY_GAP other items have had their first attempt, or until none remain.
  */
-export function retryQueue(sessionEvents: readonly ReviewEvent[], picked: readonly string[], gap = RETRY_GAP): RetryQueue {
-	const events = [...sessionEvents].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
-	const firsts = events.filter((e) => e.kind === "review");
-	const attempted = new Set(firsts.map((e) => e.itemId));
-	const retried = new Set(events.filter((e) => e.kind === "retry").map((e) => e.itemId));
-	const remaining = picked.filter((id) => !attempted.has(id));
+export function retryQueue(sessionAttempts: readonly Attempt[], picked: readonly string[], gap = RETRY_GAP): RetryQueue {
+	const rows = [...sessionAttempts].filter((a) => picked.includes(a.conceptId)).sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+	const firsts: Attempt[] = [];
+	const seen = new Set<string>();
+	for (const a of rows) if (a.role === "attempt" && !seen.has(a.conceptId)) { seen.add(a.conceptId); firsts.push(a); }
+	const retried = new Set(rows.filter((a) => a.role === "retry").map((a) => a.conceptId));
+	const remaining = picked.filter((id) => !seen.has(id));
 	const waiting: string[] = [];
 	const ready: string[] = [];
-	firsts.forEach((event, index) => {
-		if (event.rating !== 1 || event.noRetry || retried.has(event.itemId)) return;
+	firsts.forEach((a, index) => {
+		if (a.rating !== 1 || a.noRetry || retried.has(a.conceptId)) return;
 		const since = firsts.length - 1 - index;
-		(since >= gap || remaining.length === 0 ? ready : waiting).push(event.itemId);
+		(since >= gap || remaining.length === 0 ? ready : waiting).push(a.conceptId);
 	});
 	return { waiting, ready, remaining };
 }

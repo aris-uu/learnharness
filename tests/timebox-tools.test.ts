@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { timeboxTools } from "../src/agent/tools/timebox.ts";
+import { attempt, memoryMathStore } from "./math-store-fixture.ts";
 
 function setup(messages: unknown[] = []) {
 	const chat: any = { id: "c1", messages, tree: { nodes: [{ id: "a", title: "A" }, { id: "b", title: "B" }], edges: [] }, settings: { timeboxMin: 60 } };
@@ -52,12 +53,12 @@ test("close_session: \"met\" needs credited evidence on every node of the goal",
 test("close_session in a consolidation sitting needs a close check per attempted item", async () => {
 	const chat: any = { id: "c1", kind: "review", messages: [], settings: { timeboxMin: 25, consolidate: true } };
 	const chatStore: any = { getChat: () => chat, saveSettings: (_id: string, s: unknown) => { chat.settings = s; } };
-	const events: any[] = [
-		{ id: "1", itemId: "t#a", chatId: "c1", at: "2026-11-21T03:00:00Z", kind: "review", rating: 3 },
-		{ id: "2", itemId: "t#b", chatId: "c1", at: "2026-11-21T03:05:00Z", kind: "review", rating: 2 },
-		{ id: "3", itemId: "t#a", chatId: "c1", at: "2026-11-21T03:10:00Z", kind: "check", check: "close", rating: 3 },
-	];
-	const tools = timeboxTools({ chatId: "c1", chatStore, reviewStore: { list: () => events, append: () => {}, removeChat: () => 0 } });
+	const mathStore = memoryMathStore({ attempts: [
+		attempt("a", "2026-11-21T03:00:00Z", { chatId: "c1", source: "consolidate", rating: 3 }),
+		attempt("b", "2026-11-21T03:05:00Z", { chatId: "c1", source: "consolidate", rating: 2 }),
+		attempt("a", "2026-11-21T03:10:00Z", { chatId: "c1", source: "consolidate", role: "check", check: "close", rating: 3 }),
+	] });
+	const tools = timeboxTools({ chatId: "c1", chatStore, mathStore });
 	const close = async (input: unknown) => { const r: any = await tools.close_session!.execute("t", input as never); return { error: r.isError === true || r.details?.ok === false, text: r.content?.[0]?.text ?? "" }; };
 	const handoff = "a holds; b fragile. Next: b from the statement.";
 	const refused = await close({ verdicts: [], handoff });

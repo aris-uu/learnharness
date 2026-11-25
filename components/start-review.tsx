@@ -9,6 +9,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { BrainIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { writeDraftConsolidate } from "@/components/math-mode";
 
 export { REVIEW_OPENING_PROMPT } from "@/components/review-prompt";
 export const NEW_REVIEW_HREF = "/chat/new?mode=review";
@@ -24,6 +25,24 @@ export function StartReviewButton({ due, className }: { due: number; className?:
 			<BrainIcon className="size-4" />
 			{due === 0 ? "Nothing due — review anyway" : `Start review (${due} due)`}
 		</Link>
+	);
+}
+
+/**
+ * R5: the new-session screen's due line, "Review (N) · Consolidate (M)".
+ * Each opens the review draft in that mode. Renders nothing when nothing is due.
+ */
+export function DueEntry({ className }: { className?: string }) {
+	const { split } = useMemoryDueSplit();
+	if (!split || split.mature + split.learning === 0) return null;
+	const link = "underline-offset-2 hover:text-foreground hover:underline";
+	return (
+		<p data-testid="due-entry" className={cn("pointer-events-auto text-center text-xs text-muted-foreground", className)}>
+			Due now:{" "}
+			<Link href={NEW_REVIEW_HREF} className={link} onClick={() => writeDraftConsolidate(false)} data-testid="due-entry-review">Review ({split.mature})</Link>
+			{" · "}
+			<Link href={NEW_REVIEW_HREF} className={link} onClick={() => writeDraftConsolidate(true)} data-testid="due-entry-consolidate">Consolidate ({split.learning})</Link>
+		</p>
 	);
 }
 
