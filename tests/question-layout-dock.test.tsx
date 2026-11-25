@@ -1,7 +1,7 @@
 import React, { act } from "react";
 (globalThis as Record<string, unknown>).React = React;
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { after, test } from "node:test";
 import { createRoot } from "react-dom/client";
 import { parseHTML } from "linkedom";
 import { QuestionDock, type QuestionLayoutRequest } from "../components/question-dock.tsx";
@@ -51,12 +51,18 @@ const askInput = {
 	question: "Which one?", options: [{ label: "This" }, { label: "That" }],
 } as unknown as AskToolInput;
 
+// Every mounted root, unmounted at the end even when a test fails before its
+// own cleanup: a live answer timer (setInterval) would keep the process alive.
+const mounted = new Set<ReturnType<typeof createRoot>>();
+after(async () => { for (const root of mounted) await act(async () => { try { root.unmount(); } catch { /* already unmounted */ } }); });
+
 async function mount(
 	layoutRequest: QuestionLayoutRequest | null, layouts: (QuestionLayout | null)[], toolCallId = "q1",
 	kind: { toolName: "quiz" | "ask_user_question"; input: QuizToolInput | AskToolInput } = { toolName: "quiz", input },
 ) {
 	const host = document.createElement("div"); document.body.append(host);
 	const root = createRoot(host);
+	mounted.add(root);
 	const render = (req: QuestionLayoutRequest | null) => act(async () => root.render(
 		<QuestionDock toolName={kind.toolName} toolCallId={toolCallId} input={kind.input} expanded onExpand={() => {}} onSubmit={() => {}}
 			dictationClaim={false} layoutRequest={req} onLayout={(l) => layouts.push(l)} />,

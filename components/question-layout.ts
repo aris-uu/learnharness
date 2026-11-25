@@ -258,6 +258,8 @@ export function cloneWithImageSizes(live: HTMLElement): Node {
 
 /** Typing surfaces (the Other answer field) in a clone, emptied back to
  *  their placeholder: a draft is never content the layout depends on. */
+/** Controls inside the measured question that are not content. */
+const LAYOUT_CHROME = '[data-testid="answer-timer"]';
 const DRAFT_FIELD = '[role="textbox"], [contenteditable]:not([contenteditable="false"])';
 function withoutDrafts(clone: HTMLElement): HTMLElement {
 	for (const field of clone.querySelectorAll<HTMLElement>(DRAFT_FIELD)) {
@@ -600,7 +602,11 @@ export function questionContentFingerprint(parts: Pick<QuestionParts, "question"
 		for (const el of options.querySelectorAll(".katex, svg, img, code, table")) if (!el.closest(DRAFT_FIELD)) rich++;
 		for (const field of options.querySelectorAll(DRAFT_FIELD)) if (!field.parentElement?.closest(DRAFT_FIELD)) text -= field.textContent?.length ?? 0;
 	}
-	return `${parts.question.querySelectorAll("*").length}|${rich}|${text}|${fontEpoch(parts.question.ownerDocument?.fonts)}`;
+	// The answer timer appears in the label row once the question is shown:
+	// fixed-size chrome, not content, so it never forces a re-measure.
+	let elements = parts.question.querySelectorAll("*").length;
+	for (const chrome of parts.question.querySelectorAll(LAYOUT_CHROME)) elements -= chrome.querySelectorAll("*").length + 1;
+	return `${elements}|${rich}|${text}|${fontEpoch(parts.question.ownerDocument?.fonts)}`;
 }
 
 /**

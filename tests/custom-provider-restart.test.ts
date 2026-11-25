@@ -4,8 +4,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { after, test } from "node:test";
+import { after, before, test } from "node:test";
 import { CUSTOM_AUTH_BINDING } from "../src/core/custom-provider-auth.ts";
+import { bundleChild } from "./helpers/bundle-child.ts";
+// Bundled once: every spawn below runs plain JS (a cold tsx start per spawn
+// cost minutes in all, and timed out under full-suite load).
+let crashChild = "";
+before(async () => { crashChild = await bundleChild("tests/helpers/custom-provider-crash.ts"); });
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "lh-custom-restart-"));
 after(() => fs.rmSync(root, { recursive: true, force: true }));
 const base = "http://first.invalid/v1";
@@ -17,7 +22,7 @@ function profile() {
 	return home;
 }
 function child(home: string, mode: "mutate" | "inspect", action = "key", fault = "none", envKey?: string) {
-	const result = spawnSync(process.execPath, ["--import", "tsx", "tests/helpers/custom-provider-crash.ts", mode, action, fault], { cwd: process.cwd(), env: { PATH: process.env.PATH, HOME: home, USERPROFILE: home, NODE_ENV: "test", LH_DATA_DIR: home, LH_AUTH_FILE: path.join(home, "auth.json"), LH_IGNORE_ENV_KEYS: "0", ...(envKey ? { CUSTOM_OPENAI_API_KEY: envKey } : {}) }, encoding: "utf8", timeout: 15000 });
+	const result = spawnSync(process.execPath, [crashChild, mode, action, fault], { cwd: process.cwd(), env: { PATH: process.env.PATH, HOME: home, USERPROFILE: home, NODE_ENV: "test", LH_DATA_DIR: home, LH_AUTH_FILE: path.join(home, "auth.json"), LH_IGNORE_ENV_KEYS: "0", ...(envKey ? { CUSTOM_OPENAI_API_KEY: envKey } : {}) }, encoding: "utf8", timeout: 15000 });
 	assert.ifError(result.error);
 	assert.ok(result.status === 0 || result.status === 77, `${result.status}: ${result.stderr}`);
 	return { exit: result.status, data: result.stdout.trim() ? JSON.parse(result.stdout.trim().split("\n").at(-1)!) : undefined };
