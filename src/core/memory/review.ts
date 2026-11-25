@@ -42,8 +42,14 @@ export function ratingFor(input: RatingInput): FsrsRating {
 }
 
 /** A review session's title: dated, numbered from the second one that day. */
+/** YYYY-MM-DD in the machine's own time zone (the learner's day, not UTC's). */
+export function localDate(nowMs: number): string {
+	const d = new Date(nowMs);
+	return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 export function reviewTitle(nowMs: number, existingTitles: readonly string[] = [], prefix = "Review"): string {
-	const base = `${prefix} ${new Date(nowMs).toISOString().slice(0, 10)}`;
+	const base = `${prefix} ${localDate(nowMs)}`;
 	const taken = new Set(existingTitles);
 	if (!taken.has(base)) return base;
 	let n = 2;

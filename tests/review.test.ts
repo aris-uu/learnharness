@@ -66,10 +66,14 @@ describe("deferred retries", () => {
 
 describe("review titles", () => {
 	it("numbers the second and later review sessions of a day", () => {
-		const t = Date.parse("2026-11-18T09:00:00.000Z");
+		const t = new Date(2026, 10, 18, 9).getTime();
 		assert.equal(reviewTitle(t), "Review 2026-11-18");
 		assert.equal(reviewTitle(t, ["Review 2026-11-18"]), "Review 2026-11-18 (2)");
 		assert.equal(reviewTitle(t, ["Review 2026-11-18", "Review 2026-11-18 (2)", "Review 2026-11-17"]), "Review 2026-11-18 (3)");
+	});
+	it("uses the learner's local day, not UTC's", () => {
+		// 00:30 local on the 26th is still the 25th in UTC anywhere east of UTC.
+		assert.equal(reviewTitle(new Date(2026, 10, 26, 0, 30).getTime(), [], "Consolidate"), "Consolidate 2026-11-26");
 	});
 });
 
