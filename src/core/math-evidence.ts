@@ -140,7 +140,7 @@ const WRITTEN_QUESTION_TOOLS = new Set(["explain", "recall"]);
  * (owner, 2026-11-19: probe-proven prerequisites were landing as assumed,
  * which leaves them without a forgetting curve).
  */
-export function answeredWrittenQuestions(messages: readonly unknown[]): Set<string> {
+export function answeredWrittenQuestions(messages: readonly unknown[]): Map<string, string> {
 	const answered = new Set<string>();
 	for (const raw of messages as RecordMessage[]) {
 		if (raw?.role !== "toolResult" || !WRITTEN_QUESTION_TOOLS.has(raw.toolName as string) || raw.isError === true || !Array.isArray(raw.content)) continue;
@@ -151,7 +151,30 @@ export function answeredWrittenQuestions(messages: readonly unknown[]): Set<stri
 			if (answer.dontKnow !== true && answer.dismissed !== true) answered.add(raw.toolCallId);
 		} catch { /* An unparseable result is not evidence of an attempt. */ }
 	}
-	return answered;
+	// id → question text, oldest first. The model does not reliably see
+	// tool-call ids, so rejections list these for it to copy (owner,
+	// 2026-11-25: probe answers kept landing as assumed for want of the id).
+	const questions = new Map<string, string>();
+	for (const raw of messages as RecordMessage[]) {
+		for (const call of toolCalls(raw)) {
+			if (typeof call.id !== "string" || !answered.has(call.id)) continue;
+			const question = (call.arguments as { question?: unknown } | undefined)?.question;
+			questions.set(call.id, typeof question === "string" ? question : "");
+		}
+	}
+	for (const id of answered) if (!questions.has(id)) questions.set(id, "");
+	return questions;
+}
+
+/** The answered written questions as a list the model can copy an id from. */
+export function describeWrittenQuestions(questions: ReadonlyMap<string, string>): string {
+	if (questions.size === 0) return "This session has no answered written question.";
+	const clip = (text: string) => {
+		const flat = text.replace(/\s+/g, " ").trim();
+		return flat.length > 100 ? `${flat.slice(0, 100)}…` : flat;
+	};
+	return "Answered written questions in this session (copy the id as probeAnswer):\n" +
+		[...questions].map(([id, question]) => `- ${id}: ${clip(question) || "(no question text)"}`).join("\n");
 }
 
 function isCredited(entry: MathEvidence): boolean {

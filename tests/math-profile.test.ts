@@ -140,7 +140,7 @@ describe("math tools", () => {
 		const tools = createTeacherTools(ctx, undefined, "math");
 		const refused = await tools.record_evidence!.execute("r1", { nodeId: "a", dimension: "K", outcome: "correct", hints: 0, note: "n" });
 		assert.match(JSON.stringify(refused), /written attempt/);
-		await tools.record_evidence!.execute("r2", { nodeId: "a", dimension: "K", outcome: "assumed", hints: 0, note: "probe answer" });
+		await tools.record_evidence!.execute("r2", { nodeId: "a", dimension: "K", outcome: "assumed", hints: 0, note: "solid in an earlier session", basisSession: "old" });
 		const passed = await tools.explain!.execute("z", { ...explainArgs, nodeId: "b", conceal: true });
 		assert.doesNotMatch(JSON.stringify(passed), /Mastery gate/);
 	});
@@ -157,6 +157,25 @@ describe("math tools", () => {
 		assert.match(JSON.stringify(await tools.record_evidence!.execute("e1", { ...entry, probeAnswer: "nope" })), /not an answered written question/);
 		const credited = await tools.record_evidence!.execute("e2", { ...entry, probeAnswer: "p1" });
 		assert.equal((credited as { details: { ok?: boolean } }).details.ok, true);
+	});
+	it("never records this session's probe as assumed, and lists the probe ids to cite instead", async () => {
+		const probe = { messages: [
+			{ role: "assistant", content: [{ type: "toolCall", id: "p1", name: "recall", arguments: { question: "State Lagrange's theorem" } }] },
+			{ role: "toolResult", toolCallId: "p1", toolName: "recall", content: [{ type: "text", text: JSON.stringify({ text: "the statement" }) }] },
+		] as unknown[], tree };
+		const probeCtx = { chatId: "c", chatStore: { getChat: () => probe }, jobStore: {}, spawn: () => {}, searchAvailable: () => false } as never;
+		const tools = createTeacherTools(probeCtx, undefined, "math");
+		const assumed = { nodeId: "a", dimension: "K", outcome: "assumed", hints: 0, note: "Probe this session: stated it unaided" };
+		const text = async (id: string, input: object) => JSON.stringify(await tools.record_evidence!.execute(id, input));
+		const noBasis = await text("a1", assumed);
+		assert.match(noBasis, /needs basisSession/);
+		assert.match(noBasis, /p1: State Lagrange's theorem/, "the refusal names the probe question to cite");
+		assert.match(await text("a2", { ...assumed, basisSession: "c" }), /this session/);
+		assert.match(await text("a3", { ...assumed, basisSession: "old", probeAnswer: "p1" }), /never assumed/);
+		assert.match(await text("a4", { ...assumed, outcome: "correct", basisSession: "old" }), /basisSession belongs to assumed only/);
+		assert.match(await text("a5", { ...assumed, outcome: "correct" }), /p1: State Lagrange's theorem/, "a refused credit also lists the ids");
+		const fromEarlier = await tools.record_evidence!.execute("a6", { ...assumed, note: "solid in old", basisSession: "old" });
+		assert.equal((fromEarlier as { details: { ok?: boolean } }).details.ok, true);
 	});
 	it("hides a concealed answer on the card", () => {
 		const answer = { kind: "explain" } as QuestionAnswerData;

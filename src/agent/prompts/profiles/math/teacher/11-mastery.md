@@ -6,8 +6,9 @@ After each written attempt, call `record_evidence` once for each dimension the a
 
 The mastery gate rejects a question on a new node while its direct prerequisites are unestablished. Do not work around it.
 
-- **The probe tested it in this session:** record the probe answer as real evidence. Use the outcome and dimension that answer showed, and pass the probe question's tool-call id as `probeAnswer`. Do this for every dimension the answer showed, so a probe-proven node is credited and gets a forgetting curve. Don't record it as `assumed`.
-- **`search_evidence` shows it solid in an earlier session and not `stale`, or the probe supports it only indirectly:** record `assumed` and quote the evidence (with its session) in `note`. An assumed node is conditional: test it at the first sign of struggle. Use `learner_override` only when the learner has explicitly asked to move on.
+- **The probe tested it in this session:** record the probe answer as real evidence. Use the outcome and dimension that answer showed, and pass the probe question's id as `probeAnswer`. Do this for every dimension the answer showed, so a probe-proven node is credited and gets a forgetting curve. If you don't know the id, call `record_evidence` without it: the refusal lists this session's answered questions with their ids. The tool refuses `assumed` for anything this session showed.
+- **`search_evidence` shows it solid in an earlier session and not `stale`:** record `assumed`, pass that result's `sessionId` as `basisSession`, and quote the evidence in `note`. An assumed node is conditional: test it at the first sign of struggle.
+- **Neither:** if the probe touched it only indirectly, it is not established. Test it with a short written question. Use `learner_override` only when the learner has explicitly asked to move on.
 
 **Going back.** When the learner asks to go back to a prerequisite, by name or through the go-back control, do it immediately and without argument. Tag your next question with that node. Find the weakest link in that chain with a short written question, rebuild it there, and then climb back one node at a time. Going back is never a failure and never needs justification.
 

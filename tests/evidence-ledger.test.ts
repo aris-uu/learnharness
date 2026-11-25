@@ -143,8 +143,18 @@ describe("evidence tools", () => {
 		const store = memoryStore();
 		const tools = createTeacherTools(ctxWith(store), undefined, "math");
 		await tools.record_evidence!.execute("refused", { nodeId: "lagrange", dimension: "K", outcome: "correct", hints: 0, note: "n" });
-		await tools.record_evidence!.execute("ok", { nodeId: "lagrange", dimension: "K", outcome: "assumed", hints: 0, note: "probe" });
-		assert.deepEqual(store.records.map((r) => [r.id, r.chatId, r.nodeTitle]), [["ok", "now", "Lagrange's theorem"]]);
+		store.records.push(record({ id: "earlier", chatId: "old" }));
+		await tools.record_evidence!.execute("ok", { nodeId: "lagrange", dimension: "K", outcome: "assumed", hints: 0, note: "solid in old", basisSession: "old" });
+		assert.deepEqual(store.records.slice(1).map((r) => [r.id, r.chatId, r.nodeTitle]), [["ok", "now", "Lagrange's theorem"]]);
+	});
+	it("refuses assumed whose basisSession holds no real attempt in the ledger", async () => {
+		const store = memoryStore();
+		store.records.push(record({ id: "x", chatId: "laundered", outcome: "assumed" }));
+		const tools = createTeacherTools(ctxWith(store), undefined, "math");
+		const input = { nodeId: "lagrange", dimension: "K", outcome: "assumed", hints: 0, note: "n" };
+		assert.match(JSON.stringify(await tools.record_evidence!.execute("a", { ...input, basisSession: "laundered" })), /holds no recorded attempt/);
+		assert.match(JSON.stringify(await tools.record_evidence!.execute("b", { ...input, basisSession: "missing" })), /holds no recorded attempt/);
+		assert.equal(store.records.length, 1);
 	});
 	it("search_evidence returns other sessions' evidence with the session title", async () => {
 		const store = memoryStore();
