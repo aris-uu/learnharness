@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { timeboxTools } from "../src/agent/tools/timebox.ts";
-import { attempt, memoryMathStore } from "./math-store-fixture.ts";
+import { attempt, concept, graphOf, memoryMathStore } from "./math-store-fixture.ts";
 
 function setup(messages: unknown[] = []) {
 	const chat: any = { id: "c1", messages, tree: { nodes: [{ id: "a", title: "A" }, { id: "b", title: "B" }], edges: [] }, settings: { timeboxMin: 60 } };
@@ -65,4 +65,37 @@ test("close_session in a consolidation sitting needs a close check per attempted
 	assert.equal(refused.error, true);
 	assert.match(refused.text, /yet on: b\./);
 	assert.equal((await close({ verdicts: [], handoff, closeChecksSkipped: "The learner stopped before b's close check." })).error, false);
+});
+
+test("close_session in a consolidation sitting asks a required contrast (a pair confused before) first", async () => {
+	const chat: any = { id: "c1", kind: "review", messages: [], settings: { timeboxMin: 25, consolidate: true } };
+	const chatStore: any = { getChat: () => chat, saveSettings: (_id: string, s: unknown) => { chat.settings = s; } };
+	const graph = graphOf([concept("a", { confusableWith: ["b"] }), concept("b", { confusableWith: ["a"] })]);
+	const sitting = (id: string, at: string, extra = {}) => attempt(id, at, { chatId: "c1", source: "consolidate", rating: 3, ...extra });
+	const mathStore = memoryMathStore({ graph, attempts: [
+		attempt("a", "2026-11-19T03:00:00Z", { confusedWith: "b", outcome: "incorrect" }),
+		sitting("a", "2026-11-21T03:00:00Z"), sitting("b", "2026-11-21T03:05:00Z"),
+		sitting("a", "2026-11-21T03:10:00Z", { role: "check", check: "close" }), sitting("b", "2026-11-21T03:11:00Z", { role: "check", check: "close" }),
+	] });
+	const tools = timeboxTools({ chatId: "c1", chatStore, mathStore });
+	const close = async (input: unknown) => { const r: any = await tools.close_session!.execute("t", input as never); return { error: r.isError === true || r.details?.ok === false, text: r.content?.[0]?.text ?? "" }; };
+	const handoff = "a and b hold alone; still swapped side by side.";
+	const refused = await close({ verdicts: [], handoff });
+	assert.equal(refused.error, true);
+	assert.match(refused.text, /Required contrast not asked yet: a vs b/);
+	mathStore.appendAttempt(sitting("b", "2026-11-21T03:12:00Z", { role: "check", check: "contrast", pairWith: "a", dimension: "U" }));
+	assert.equal((await close({ verdicts: [], handoff })).error, false);
+});
+
+test("close_session: contrastSkipped lets a sitting close without the required contrast", async () => {
+	const chat: any = { id: "c1", kind: "review", messages: [], settings: { timeboxMin: 25, consolidate: true } };
+	const chatStore: any = { getChat: () => chat, saveSettings: (_id: string, s: unknown) => { chat.settings = s; } };
+	const graph = graphOf([concept("a", { confusableWith: ["b"] }), concept("b", { confusableWith: ["a"] })]);
+	const mathStore = memoryMathStore({ graph, attempts: [
+		attempt("a", "2026-11-19T03:00:00Z", { confusedWith: "b", outcome: "incorrect" }),
+		attempt("a", "2026-11-21T03:00:00Z", { chatId: "c1", source: "consolidate" }), attempt("b", "2026-11-21T03:05:00Z", { chatId: "c1", source: "consolidate" }),
+	] });
+	const tools = timeboxTools({ chatId: "c1", chatStore, mathStore });
+	const r: any = await tools.close_session!.execute("t", { verdicts: [], handoff: "Time ran out before the pair.", closeChecksSkipped: "Time ran out.", contrastSkipped: "Time ran out before a vs b." } as never);
+	assert.notEqual(r.details?.ok, false);
 });

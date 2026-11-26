@@ -8,7 +8,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
-import type { Attempt } from "../src/core/math-concepts.ts";
+import { linkConfusable, type Attempt } from "../src/core/math-concepts.ts";
+import { memoryItems } from "../src/core/memory/items.ts";
 import { ratingFor, retryQueue, reviewTitle } from "../src/core/memory/review.ts";
 import { phaseAt3Lh } from "../src/core/phases.ts";
 import type { LhMessage } from "../src/core/native-messages.ts";
@@ -111,7 +112,7 @@ describe("reviewer tools", () => {
 			record({ id: "c", conceptId: "hausdorff" }), record({ id: "d", conceptId: "hausdorff", dimension: "S" }),
 			record({ id: "e", conceptId: "fresh", at: iso(now - 1000) }), record({ id: "f", conceptId: "fresh", dimension: "U", at: iso(now - 1000) }),
 		];
-		const graph = graphOf([concept("compact", { title: "Compact subsets" }), concept("hausdorff", { title: "Hausdorff" }), concept("fresh", { title: "Fresh" })], [{ from: "hausdorff", to: "compact" }]);
+		const graph = graphOf([concept("compact", { title: "Compact subsets", checks: { U: "Drop Hausdorff and give the counterexample", P: "The disjoint-neighbourhood step" } }), concept("hausdorff", { title: "Hausdorff" }), concept("fresh", { title: "Fresh" })], [{ from: "hausdorff", to: "compact" }]);
 		const mathStore = memoryMathStore({ graph, attempts });
 		const reviews = mathStore.appended;
 		const review = { messages: [] as unknown[], tree: undefined as PlanTree | undefined, settings: consolidate ? { consolidate: true } : {} };
@@ -199,7 +200,8 @@ describe("reviewer tools", () => {
 		assert.equal((await call("record_review", { ...grade, followUp: true }, "f0")).isError, true, "no first attempt yet");
 		const first = await call("record_review", grade, "g1");
 		assert.equal(first.details.rating, "Good");
-		assert.match(first.details.instruction, /climb one rung/);
+		assert.match(first.details.instruction, /Climb now: ask one U question/, "U is missing from a definition's depth target, so the climb is required");
+		assert.deepEqual(first.details.depthMissing, ["U"]);
 		const dueAfterFirst = first.details.nextDue;
 		const up = await call("record_review", { ...grade, dimension: "U", outcome: "partial", question: "Drop Hausdorff", followUp: true }, "f1");
 		assert.equal(up.details.kind, "followup");
@@ -210,7 +212,7 @@ describe("reviewer tools", () => {
 		assert.equal(reviews[0]!.source, "review");
 	});
 
-	it("a failed follow-up caps the first attempt one step; a clean one leaves it", async () => {
+	it("a clean depth follow-up lifts the depth cap; a failed one keeps the item at Hard", async () => {
 		const grade = { nodeId: "compact", dimension: "K", outcome: "correct", hints: 0, question: "State it", note: "clean", confidence: 95, elapsedSeconds: 30, expectedSeconds: 60 };
 		const run = async (followUpOutcome: "correct" | "incorrect") => {
 			const { call, answer, reviews } = setup(T0 + 60 * DAY, true);
@@ -218,13 +220,15 @@ describe("reviewer tools", () => {
 			answer("compact", "x1");
 			const first = await call("record_review", grade, "g1");
 			assert.equal(first.details.rating, "Easy");
-			const up = await call("record_review", { ...grade, dimension: "P", outcome: followUpOutcome, question: "Prove it", followUp: true }, "f1");
+			const up = await call("record_review", { ...grade, dimension: "U", outcome: followUpOutcome, question: "Drop Hausdorff", followUp: true }, "f1");
 			return { first, up, reviews };
 		};
 		const clean = await run("correct");
-		assert.equal(clean.up.details.nextDue, clean.first.details.nextDue, "a clean follow-up leaves the schedule");
+		assert.deepEqual(clean.first.details.depthMissing, ["U"]);
+		assert.ok(Date.parse(clean.up.details.nextDue) > Date.parse(clean.first.details.nextDue), "the Easy counts once U holds");
+		assert.deepEqual(clean.up.details.depthMissing, []);
 		const slipped = await run("incorrect");
-		assert.ok(Date.parse(slipped.up.details.nextDue) < Date.parse(slipped.first.details.nextDue), "Easy capped to Good: due sooner");
+		assert.ok(Date.parse(slipped.up.details.nextDue) <= Date.parse(slipped.first.details.nextDue), "still Hard: never later");
 		assert.match(slipped.up.details.instruction, /lowers this item's first attempt/);
 		assert.equal(slipped.reviews[0]!.rating, 4, "the log keeps the graded rating");
 		assert.equal(slipped.reviews[0]!.source, "consolidate");
@@ -295,6 +299,54 @@ describe("reviewer tools", () => {
 		assert.deepEqual(reviews.map((e) => [e.role, e.rating]), [["attempt", 1], ["retry", 3]]);
 		assert.equal(reviews[0]!.noRetry, true);
 		assert.ok(reviews[0]!.predicted! < 0.85);
+	});
+
+	it("confusedWith links the pair and tags the habit; an unknown concept is refused", async () => {
+		const { call, answer, reviews, mathStore } = setup(T0 + 60 * DAY, true);
+		await call("pick_items", { itemIds: ["compact"], override: true });
+		answer("compact", "x1");
+		const grade = { nodeId: "compact", dimension: "K", outcome: "incorrect", hints: 0, question: "State it", note: "stated Hausdorff instead" };
+		const refused = await call("record_review", { ...grade, confusedWith: "nope" }, "g0");
+		assert.equal(refused.isError, true);
+		assert.match(refused.content[0]!.text, /update_concept first/);
+		const graded = await call("record_review", { ...grade, confusedWith: "hausdorff" }, "g1");
+		assert.equal(graded.isError, undefined);
+		assert.match(graded.details.linked, /now marked confusable/);
+		assert.deepEqual([reviews[0]!.habits, reviews[0]!.confusedWith], [["confused_with"], "hausdorff"]);
+		assert.deepEqual(mathStore.graph().concepts.hausdorff!.confusableWith, ["compact"]);
+	});
+
+	it("a U or P grade needs the concept's checks for that dimension", async () => {
+		const { call, answer } = setup(T0 + 60 * DAY);
+		await call("pick_items", { itemIds: ["hausdorff"], override: true });
+		answer("hausdorff", "x1");
+		const refused = await call("record_review", { nodeId: "hausdorff", dimension: "P", outcome: "correct", hints: 0, question: "Prove it", note: "n" }, "g1");
+		assert.equal(refused.isError, true);
+		assert.match(refused.content[0]!.text, /no checks\.P/);
+	});
+
+	it("a contrast is one grade logged on both items; a failed one keeps the pair at Hard", async () => {
+		const { call, answer, reviews, mathStore } = setup(T0 + 60 * DAY, true);
+		await call("pick_items", { itemIds: ["compact", "hausdorff"], override: true });
+		const k = { dimension: "K", outcome: "correct", hints: 0, question: "State it", note: "clean" };
+		answer("compact", "x1");
+		await call("record_review", { ...k, nodeId: "compact" }, "g1");
+		const contrast = { nodeId: "compact", dimension: "U", outcome: "incorrect", hints: 0, question: "Which is which, and where do they differ?", note: "swapped them", check: "contrast", pairWith: "hausdorff" };
+		const unlinked = await call("record_review", contrast, "c0");
+		assert.match(unlinked.content[0]!.text, /not marked confusable/);
+		mathStore.saveGraph(linkConfusable(mathStore.graph(), "compact", "hausdorff"));
+		const early = await call("record_review", contrast, "c1");
+		assert.match(early.content[0]!.text, /hausdorff's own first attempt/);
+		answer("hausdorff", "x2");
+		await call("record_review", { ...k, nodeId: "hausdorff" }, "g2");
+		assert.equal((await call("record_review", { ...contrast, pairWith: undefined }, "c2")).isError, true, "pairWith is required");
+		assert.equal((await call("record_review", contrast, "c3")).isError, undefined);
+		assert.deepEqual(reviews.filter((r) => r.check === "contrast").map((r) => [r.conceptId, r.pairWith, r.rating]), [["compact", "hausdorff", 1], ["hausdorff", "compact", 1]]);
+		assert.match((await call("record_review", contrast, "c4")).content[0]!.text, /already had its contrast/);
+		for (const id of ["compact", "hausdorff"]) {
+			const e = memoryItems(mathStore.graph(), mathStore.attempts()).find((i) => i.id === id)!.events.find((x) => x.kind === "review" && x.chatId === "rev1")!;
+			assert.deepEqual([e.rating, e.cappedBy], [2, "contrast"], id);
+		}
 	});
 });
 

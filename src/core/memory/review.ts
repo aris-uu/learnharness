@@ -6,16 +6,16 @@
  * docs/consolidation-sessions-plan.md §4, docs/global-concepts-plan.md.
  */
 import type { MathDimension, MathHabit, MathOutcome } from "../math-evidence.ts";
-import { dependentsOf, prerequisitesOf, type Attempt, type ConceptGraph } from "../math-concepts.ts";
+import { confusablesOf, dependentsOf, prerequisitesOf, type Attempt, type ConceptGraph, type ConceptKind } from "../math-concepts.ts";
 import type { FsrsRating } from "./fsrs.ts";
-import type { MemoryItemSnapshot, MemoryStage } from "./items.ts";
+import { DEPTH_TARGET, type MemoryItemSnapshot, type MemoryStage } from "./items.ts";
 
 export const REVIEW_OUTCOMES = ["correct", "correct_slow", "partial", "incorrect"] as const satisfies readonly MathOutcome[];
 export type ReviewOutcome = (typeof REVIEW_OUTCOMES)[number];
 
 export const RATING_LABELS: Record<FsrsRating, string> = { 1: "Again", 2: "Hard", 3: "Good", 4: "Easy" };
 
-export const REVIEW_CHECKS = ["repair", "close"] as const;
+export const REVIEW_CHECKS = ["repair", "close", "contrast"] as const;
 export type ReviewCheck = (typeof REVIEW_CHECKS)[number];
 
 export interface RatingInput {
@@ -76,6 +76,13 @@ export interface ReviewCandidate {
 	daysOverdue: number;
 	stability: number | null;
 	credited: MathDimension[];
+	/** Dimensions held cleanly after the teaching sitting, and what the kind's depth target still misses (an item cannot mature until it is empty). */
+	retained: MathDimension[];
+	depthMissing: MathDimension[];
+	/** The dimension to ask the schedule-moving first attempt on (firstRungFor). */
+	firstRung: MathDimension;
+	/** Concepts the learner easily mixes up with this one. */
+	confusableWith?: string[];
 	/** The last few attempts, newest first, so no question repeats. */
 	history: Array<{ at: string; dimension: MathDimension; outcome: string; question?: string; note: string }>;
 	habits: MathHabit[];
@@ -88,6 +95,21 @@ export interface ReviewCandidate {
 
 const DAY_MS = 86_400_000;
 const STALE_RECALL = 0.7;
+
+/**
+ * FIRST RUNG (A4): K until the statement has been retrieved once after
+ * teaching (or whenever the item is stale); after that the first attempt,
+ * which moves the schedule, goes to the first missing depth dimension; with
+ * nothing missing, the target dimension held longest ago.
+ */
+export function firstRungFor(item: { kind: ConceptKind; retained: readonly MathDimension[]; depthMissing: readonly MathDimension[]; events: MemoryItemSnapshot["events"] }, stale: boolean): MathDimension {
+	const target = DEPTH_TARGET[item.kind];
+	const base = target.includes("K") ? "K" : target[0]!;
+	if (stale || (target.includes("K") && !item.retained.includes("K"))) return base;
+	if (item.depthMissing.length) return item.depthMissing[0]!;
+	const lastHeld = (d: MathDimension) => Math.max(-Infinity, ...item.events.filter((e) => e.dimension === d && e.rating >= 3).map((e) => Date.parse(e.at)));
+	return [...target].sort((a, b) => lastHeld(a) - lastHeld(b))[0]!;
+}
 /** How many harder rungs may follow a clean answer on one item in a session. */
 export const MAX_FOLLOW_UPS = 2;
 
@@ -127,6 +149,11 @@ export function reviewCandidates(input: {
 			daysOverdue: Math.max(0, Math.round(((input.nowMs - Date.parse(item.dueAt)) / DAY_MS) * 10) / 10),
 			stability: item.daysTo90 === null ? null : Math.round(item.daysTo90 * 10) / 10,
 			credited: item.credited,
+			retained: item.retained,
+			depthMissing: item.depthMissing,
+			// Every due solid item is "stale" (recall under the target); only one that has faded far opens on K again.
+			firstRung: firstRungFor(item, item.state ? item.retrievability < STALE_RECALL : true),
+			...(confusablesOf(input.graph, item.id).length ? { confusableWith: confusablesOf(input.graph, item.id) } : {}),
 			history,
 			habits,
 			duePrereqs: prerequisitesOf(input.graph, item.id).filter((id) => dueIds.has(id)),
@@ -154,7 +181,55 @@ export interface ConsolidationCluster {
 	itemIds: string[];
 	/** Mature prerequisites pulled in as warm-ups (asked as follow-ups: they never move their schedule). */
 	warmUps: string[];
+	/** Confusable concepts that are not due: asked only inside a contrast question, their schedule untouched (B3). */
+	contrastPartners: string[];
+	/** Look-alike pairs in this cluster to ask one contrast question on; `required` when the pair was confused before. */
+	contrasts: ContrastPair[];
 	reasons: Record<string, string>;
+}
+
+export interface ContrastPair {
+	itemId: string;
+	partner: string;
+	required: boolean;
+}
+
+/** Was `a` ever answered as `b`, or `b` as `a`? */
+export function confusedBefore(attempts: readonly Attempt[], a: string, b: string): boolean {
+	return attempts.some((x) => (x.conceptId === a && x.confusedWith === b) || (x.conceptId === b && x.confusedWith === a));
+}
+
+/** The look-alike pairs among `items` (each item with its confusables that are in `items` or in `partners`), de-duplicated. */
+export function contrastPairs(graph: ConceptGraph, attempts: readonly Attempt[], items: readonly string[], partners: readonly string[] = []): ContrastPair[] {
+	const pool = new Set([...items, ...partners]);
+	const seen = new Set<string>();
+	const out: ContrastPair[] = [];
+	for (const itemId of items) {
+		for (const partner of confusablesOf(graph, itemId)) {
+			if (!pool.has(partner)) continue;
+			const key = [itemId, partner].sort().join("|");
+			if (seen.has(key)) continue;
+			seen.add(key);
+			out.push({ itemId, partner, required: confusedBefore(attempts, itemId, partner) });
+		}
+	}
+	return out;
+}
+
+/** Has this sitting asked a contrast on the pair (either way round)? */
+export function contrastAsked(sitting: readonly Attempt[], a: string, b: string): boolean {
+	return sitting.some((x) => x.role === "check" && x.check === "contrast" && ((x.conceptId === a && x.pairWith === b) || (x.conceptId === b && x.pairWith === a)));
+}
+
+/**
+ * The required contrasts a sitting still owes (B2): pairs among the items it
+ * attempted and its contrast partners that were confused before and have no
+ * contrast check yet.
+ */
+export function owedContrasts(graph: ConceptGraph, attempts: readonly Attempt[], chatId: string, partners: readonly string[] = []): ContrastPair[] {
+	const here = attempts.filter((a) => a.chatId === chatId);
+	const attempted = [...new Set(here.filter((a) => a.role === "attempt").map((a) => a.conceptId))];
+	return contrastPairs(graph, attempts, attempted, partners).filter((p) => p.required && !contrastAsked(here, p.itemId, p.partner));
 }
 
 /** How long a recent Again on a neighbour keeps counting as interference. */
@@ -173,6 +248,8 @@ export function consolidationClusters(input: {
 	graph: ConceptGraph;
 	capacity: number;
 	nowMs: number;
+	/** The attempt log, to mark contrasts on pairs confused before as required. */
+	attempts?: readonly Attempt[];
 }): ConsolidationCluster[] {
 	const byId = new Map(input.snapshot.map((s) => [s.id, s]));
 	const candidateIds = new Set(input.candidates.map((c) => c.itemId));
@@ -198,8 +275,7 @@ export function consolidationClusters(input: {
 			if (candidateIds.has(dep) && !placed.has(dep) && !itemIds.includes(dep)) { itemIds.push(dep); reasons[dep] = `due dependent of ${seed.itemId}`; }
 		}
 		const seedItem = byId.get(seed.itemId);
-		const neighbours = new Set<string>(input.graph.concepts[seed.itemId]?.confusableWith ?? []);
-		for (const c of Object.values(input.graph.concepts)) if (c.confusableWith?.includes(seed.itemId)) neighbours.add(c.id);
+		const neighbours = confusablesOf(input.graph, seed.itemId);
 		for (const id of neighbours) if (candidateIds.has(id) && !placed.has(id) && !itemIds.includes(id)) { itemIds.push(id); reasons[id] = `easily confused with ${seed.itemId}`; }
 		for (const other of input.candidates) {
 			const o = byId.get(other.itemId);
@@ -212,7 +288,20 @@ export function consolidationClusters(input: {
 		for (const id of kept) placed.add(id);
 		for (const id of warmUps) placed.add(id);
 		count += kept.length;
-		clusters.push({ seed: seed.itemId, itemIds: kept, warmUps, reasons: Object.fromEntries(Object.entries(reasons).filter(([id]) => kept.includes(id) || warmUps.includes(id))) });
+		// B3: a look-alike that is not due still joins, as a contrast partner only.
+		const contrastPartners: string[] = [];
+		for (const id of kept) {
+			for (const other of confusablesOf(input.graph, id)) {
+				if (kept.includes(other) || contrastPartners.includes(other) || candidateIds.has(other) || !byId.get(other)?.state) continue;
+				contrastPartners.push(other);
+				reasons[other] = `look-alike of ${id}, not due: contrast partner only`;
+			}
+		}
+		const contrasts = contrastPairs(input.graph, input.attempts ?? [], kept, contrastPartners);
+		clusters.push({
+			seed: seed.itemId, itemIds: kept, warmUps, contrastPartners, contrasts,
+			reasons: Object.fromEntries(Object.entries(reasons).filter(([id]) => kept.includes(id) || warmUps.includes(id) || contrastPartners.includes(id))),
+		});
 	}
 	return clusters;
 }

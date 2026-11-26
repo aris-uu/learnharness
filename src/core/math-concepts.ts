@@ -73,7 +73,7 @@ export const ATTEMPT_ROLES = ["attempt", "retry", "followup", "check"] as const;
 export type AttemptRole = (typeof ATTEMPT_ROLES)[number];
 export const ATTEMPT_OUTCOMES = ["correct", "correct_slow", "partial", "incorrect", "learner_override"] as const;
 export type AttemptOutcome = (typeof ATTEMPT_OUTCOMES)[number];
-export const ATTEMPT_CHECKS = ["repair", "close"] as const;
+export const ATTEMPT_CHECKS = ["repair", "close", "contrast"] as const;
 export type AttemptCheck = (typeof ATTEMPT_CHECKS)[number];
 
 /** One line of math/attempts.jsonl. */
@@ -104,6 +104,10 @@ export interface Attempt {
 	minutesIn?: number;
 	noRetry?: boolean;
 	check?: AttemptCheck;
+	/** A contrast check's other concept: the one asked side by side with this one (docs/depth-and-contrast-plan.md B2). */
+	pairWith?: string;
+	/** The look-alike concept the answer produced instead of this one (B1). */
+	confusedWith?: string;
 	/** Recall the schedule predicted just before this attempt. */
 	predicted?: number;
 	/** Implicit credit along a prerequisite edge, written by the server (setting, default off). */
@@ -160,7 +164,8 @@ export function isAttempt(value: unknown): value is Attempt {
 		(r.rating === undefined || [1, 2, 3, 4].includes(r.rating as number)) &&
 		(r.question === undefined || isStr(r.question)) && (r.questionCallId === undefined || isStr(r.questionCallId)) &&
 		(r.loadBearing === undefined || typeof r.loadBearing === "boolean") && (r.noRetry === undefined || typeof r.noRetry === "boolean") &&
-		(r.check === undefined || inList(ATTEMPT_CHECKS, r.check)) && (r.implicit === undefined || r.implicit === true) &&
+		(r.check === undefined || inList(ATTEMPT_CHECKS, r.check)) &&
+		(r.pairWith === undefined || isStr(r.pairWith)) && (r.confusedWith === undefined || isStr(r.confusedWith)) && (r.implicit === undefined || r.implicit === true) &&
 		optNum(r.confidence) && optNum(r.elapsedSeconds) && optNum(r.expectedSeconds) && optNum(r.minutesIn) && optNum(r.predicted) &&
 		(r.habits === undefined || (Array.isArray(r.habits) && r.habits.every((t) => inList(MATH_HABITS, t))));
 }
@@ -301,6 +306,23 @@ export function withEdges(graph: ConceptGraph, edges: ReadonlyArray<{ from: stri
 }
 
 /** Direct prerequisites of a concept on the global graph. */
+/** The concepts marked as easily confused with `id`, either way round. */
+export function confusablesOf(graph: ConceptGraph, id: string): string[] {
+	const out = new Set<string>(graph.concepts[id]?.confusableWith ?? []);
+	for (const c of Object.values(graph.concepts)) if (c.confusableWith?.includes(id)) out.add(c.id);
+	out.delete(id);
+	return [...out].filter((x) => graph.concepts[x]);
+}
+
+/** Mark two concepts as confusable with each other (confusion is symmetric). Unchanged when either is missing or they are the same. */
+export function linkConfusable(graph: ConceptGraph, a: string, b: string): ConceptGraph {
+	const ca = graph.concepts[a];
+	const cb = graph.concepts[b];
+	if (!ca || !cb || a === b) return graph;
+	const add = (c: Concept, other: string): Concept => ({ ...c, confusableWith: [...new Set([...(c.confusableWith ?? []), other])] });
+	return { ...graph, concepts: { ...graph.concepts, [a]: add(ca, b), [b]: add(cb, a) } };
+}
+
 export const prerequisitesOf = (graph: ConceptGraph, id: string) => graph.edges.filter((e) => e.to === id).map((e) => e.from);
 export const dependentsOf = (graph: ConceptGraph, id: string) => graph.edges.filter((e) => e.from === id).map((e) => e.to);
 

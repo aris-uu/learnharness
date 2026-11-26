@@ -12,6 +12,9 @@ When an attempt is partial or incorrect, or reaches credit only after a hint, pa
 | `unverified_candidate` | proposes an answer, basis, inverse or counterexample without checking it against the conditions. |
 | `incomplete_statement` | states a definition or theorem with a clause or hypothesis missing. |
 | `arithmetic_slip` | makes a reduction or calculation error, with the method right. |
+| `confused_with` | gives the right answer *to a neighbouring concept*: another formula, object or theorem that looks alike (the area element for flux, a map's matrix read as a form's, a vector for its coordinate vector). Pass `confusedWith` with that concept's id instead of tagging by hand; create the look-alike with `update_concept` first if it is not a concept yet. |
+
+A confusion is not a gap in knowledge: the learner knows both objects and picked the wrong one, often confidently. Once it is linked, teach the difference with one side-by-side example (the same input through both), not by re-explaining either one alone.
 
 `record_evidence` returns `sessionHabits`, the counts so far this session. When one habit has appeared twice, aim the next question at it: ask for exactly the step that habit skips.
 

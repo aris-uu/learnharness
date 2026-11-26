@@ -12,6 +12,8 @@ import { evidenceFromMessages } from "../../core/math-evidence.ts";
 import type { SessionGoal } from "../../core/session-clock.ts";
 import type { MathStore } from "../../core/math-concepts.ts";
 import type { FsrsWeightsStore } from "../../core/memory/fsrs.ts";
+import { owedContrasts } from "../../core/memory/review.ts";
+import { pickedItems } from "./review.ts";
 import { COURSE_DIGEST_MAX_CHARS, type CourseStore } from "../../core/course.ts";
 import { courseFacts, courseOfChat, ensureCourseForChat, saveDigest, syncSitting, type CoursePorts } from "../../core/course-ops.ts";
 
@@ -40,6 +42,7 @@ const closeInput = Type.Object({
 	}), { description: "One per goal set with set_goals; empty when the sitting has no goals (review and consolidation)." }),
 	handoff: Type.String({ minLength: 20, description: "Markdown: what holds, what is fragile (name habits), what the next sitting should start with, and the deferred \"later\" items." }),
 	closeChecksSkipped: Type.Optional(Type.String({ minLength: 3, description: "Consolidation only: why some items got no blank-page close check (the learner stopped, or time ran out). Name the items." })),
+	contrastSkipped: Type.Optional(Type.String({ minLength: 3, description: "Consolidation only: why a required contrast (a pair confused before) was not asked. Name the pair." })),
 });
 
 const CREDITED = new Set(["correct", "correct_slow"]);
@@ -72,7 +75,7 @@ export function timeboxTools(ctx: { chatId: string; chatStore: ChatStore; course
 			label: CLOSE_SESSION_TOOL,
 			description: "End this time-boxed sitting after the close ritual (one blank-page retrieval per goal). Give a verdict per goal and the hand-off. \"met\" needs credited evidence on EVERY node of the goal in this session; a goal with an untaught or uncredited node is partial. A consolidation sitting needs a close check (record_review with check: \"close\") on every item it attempted, unless closeChecksSkipped says why not. Afterwards the session is read-only and the learner continues in a new one seeded with the hand-off.",
 			parameters: closeInput,
-			execute: serverExecute(CLOSE_SESSION_TOOL, closeInput, async ({ verdicts, handoff, closeChecksSkipped }) => {
+			execute: serverExecute(CLOSE_SESSION_TOOL, closeInput, async ({ verdicts, handoff, closeChecksSkipped, contrastSkipped }) => {
 				const chat = record();
 				if (!chat) return { ok: false, error: `Chat not found: ${ctx.chatId}` };
 				const state = chat.settings?.timebox ?? {};
@@ -95,6 +98,12 @@ export function timeboxTools(ctx: { chatId: string; chatStore: ChatStore; course
 					const closed = new Set(here.filter((a) => a.role === "check" && a.check === "close").map((a) => a.conceptId));
 					const owed = [...new Set(here.filter((a) => a.role === "attempt").map((a) => a.conceptId))].filter((id) => !closed.has(id));
 					if (owed.length) return { ok: false, error: `No blank-page close check yet on: ${owed.join(", ")}. Ask one per item and grade it with record_review check: "close", or pass closeChecksSkipped with the reason.` };
+				}
+				// B2: a pair confused before gets its side-by-side question before the sitting closes.
+				if (chat.kind === "review" && chat.settings?.consolidate && ctx.mathStore && !contrastSkipped) {
+					const partners = pickedItems(chat.messages)?.contrastPartners ?? [];
+					const owedPairs = owedContrasts(ctx.mathStore.graph(), ctx.mathStore.attempts(), ctx.chatId, partners);
+					if (owedPairs.length) return { ok: false, error: `Required contrast not asked yet: ${owedPairs.map((p) => `${p.itemId} vs ${p.partner}`).join("; ")}. Ask one side-by-side question and grade it with record_review check: "contrast", pairWith, or pass contrastSkipped with the reason.` };
 				}
 				const closedGoals = goals.map((g) => ({ ...g, status: byId.get(g.id) ?? g.status }));
 				const closedAt = new Date().toISOString();

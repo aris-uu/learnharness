@@ -12,14 +12,20 @@
 
 **A retry stays on the rung that failed.** After an Again on a stale item's first rung, the deferred retry is another plain K question about the same item (a different statement, or the same idea asked another way), never a computation or a proof.
 
-Stop climbing at the first slip and say in one line what was missing. A follow-up gets no repair beyond that line and no retry. A slipped follow-up (Hard or Again) lowers the item's first attempt one step (Easy → Good, Good → Hard), so the item comes back sooner; a clean one leaves the schedule alone. Never open a stale item on U, S or P. On an item that isn't stale, ask at the level its history suggests; you may still climb after a clean answer.
+Stop climbing at the first slip and say in one line what was missing. A follow-up gets no repair beyond that line and no retry. A slipped follow-up (Hard or Again) lowers the item's first attempt one step (Easy → Good, Good → Hard), so the item comes back sooner; a clean one leaves the schedule alone. `firstRung` (below) already applies this ladder: it is K whenever recall has fallen far (under 0.7) or the statement has not yet held once after teaching. Open on `firstRung` even when the item is marked `stale`: a due item whose statement has held before opens on the dimension it still needs.
 
-**Choose the dimension** (K, U, S or P) by weighing the history:
+**Choose the dimension: ask the first attempt on `firstRung`.** The server sets it from the item's history:
 
-- **On an item's first review** (`firstReview: true`), ask on a dimension in `credited`: measure whether what was learned survived the delay. Everything it knows came from the teaching session, so this is the first real retrieval. Prefer K, or the credited dimension the session used most.
-- After an item has passed a review, a dimension never credited is fair game, as is one missed last time.
-- Keep strong dimensions eligible now and then, so their credit stays honest.
+- It is K while the statement has not yet been retrieved after the teaching sitting, and whenever the item is `stale`. The ladder above still applies.
+- After that it is the first dimension in `depthMissing`: P for a theorem, U for a definition or fact, S for a technique. The first attempt is what moves the schedule, so the schedule then tracks whether the proof or the reason survived, not only the statement.
+- With nothing missing, it rotates to the target dimension held longest ago, so strong dimensions keep their credit honest.
 - Unverified items (recall `null`: never shown, only claimed) get one K question first.
+
+**An item cannot mature on the statement alone.** Until every dimension in `depthMissing` has held after the teaching sitting, a clean first attempt counts as Hard. When `record_review` says "Climb now", the follow-up is required: ask exactly the dimension it names.
+
+**A U or P question needs a target.** If the concept has no `checks` for that dimension, set them with `update_concept` before asking: one line naming what the answer must contain (for P, the step that carries the proof; for U, the hypothesis that matters and the counterexample without it). `record_review` refuses a U or P grade without them.
+
+**Look-alikes.** When an item has `confusableWith`, ask its first question without any cue that names which of the pair it is (not "the theorem about the boundary surface", just "state the divergence theorem"). The retrieval must select the right one; the bare cue is the test.
 
 **The scope decides what a question may ask.** Every question tests the item's `statement`: the definition with its clauses, the theorem with its hypotheses, the technique's steps. A question that needs something outside the statement tests a different concept. When `checks` names what a dimension must produce, ask for exactly that.
 
@@ -44,3 +50,8 @@ Report the outcome; the server turns it into a rating.
 - `hints`: count every hint rung you gave before the answer. Two or more makes the attempt a failure, however it ended.
 - Write `question` as a one-line summary of what you asked, and `note` as one line naming what was shown or missing. The next review reads both.
 - Use `habits` when an attempt fell short for one of the recurring reasons.
+- **When the answer is a look-alike's content** (the area element instead of the flux integral, the flux formula instead of the divergence theorem, a map's matrix read where a form's matrix was asked), pass `confusedWith` with that concept's id. That links the pair and tags the attempt `confused_with`, so later sittings ask a contrast question. If the look-alike isn't a concept yet, create it with `update_concept` first.
+
+## Contrast questions
+
+A contrast is **one** question about **two** look-alike concepts side by side: which is which, what each says or computes, and one case where they differ. It is the only question type that may name both. Ask it only after each item of the pair has had its first attempt (a contrast partner, which is not due, needs none). Grade it once with `record_review` on one of the pair, with `check: "contrast"` and `pairWith` naming the other. The grade is logged on both and never moves either schedule. A failed contrast keeps both items at Hard for this sitting, because a pair still being confused should not mature.

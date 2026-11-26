@@ -19,7 +19,7 @@ import {
 	type MathEvidence,
 } from "../../core/math-evidence.ts";
 import {
-	CONCEPT_KINDS, conceptBrief, scopeProblems, searchConcepts,
+	CONCEPT_KINDS, conceptBrief, linkConfusable, scopeProblems, searchConcepts,
 	type Attempt, type Concept, type MathStore,
 } from "../../core/math-concepts.ts";
 import type { LhMessage } from "../../core/native-messages.ts";
@@ -43,12 +43,15 @@ const recordEvidenceInput = Type.Object({
 	habits: Type.Optional(Type.Array(literals(MATH_HABITS), {
 		description: "When the attempt fell short (partial, incorrect, or credit that needed a hint): which recurring habit caused it. Omit when none applies.",
 	})),
+	confusedWith: Type.Optional(Type.String({
+		description: "When the answer gave a look-alike concept's content instead (the area element for the flux integral, a map's matrix for a form's): that concept's id. Links both as confusable and tags the attempt confused_with. Create the look-alike with update_concept first when it is not a concept yet.",
+	})),
 	probeAnswer: Type.Optional(Type.String({
 		description: "For evidence from this session's probe, asked before the map existed: the id of the probe question (explain or recall) whose written answer shows this. Record the outcome that answer showed. If you don't know the id, call without it: the refusal lists this session's answered questions with their ids.",
 	})),
 });
 
-type EvidenceInput = { nodeId: string; dimension: MathEvidence["dimension"]; outcome: MathEvidence["outcome"]; hints: number; note: string; habits?: unknown; probeAnswer?: string };
+type EvidenceInput = { nodeId: string; dimension: MathEvidence["dimension"]; outcome: MathEvidence["outcome"]; hints: number; note: string; habits?: unknown; probeAnswer?: string; confusedWith?: string };
 
 const updateConceptInput = Type.Object({
 	conceptId: Type.String({ description: "A concept id: a node of this plan, or one search_evidence returned." }),
@@ -209,7 +212,10 @@ export function mathTeacherTools(ctx: MathToolContext) {
 			if ((entry.outcome === "correct" || entry.outcome === "correct_slow") && entry.probeAnswer === undefined && !attemptedNodes(messages).has(entry.nodeId)) {
 				return invalidInputResult(RECORD_EVIDENCE_TOOL, [`No submitted written attempt exists on ${entry.nodeId}, so it cannot earn credit. If this session's probe tested it, pass that question's id as probeAnswer.\n${describeWrittenQuestions(questions)}`]);
 			}
-			const habits = habitsOf(entry.habits);
+			if (entry.confusedWith !== undefined && (!ctx.mathStore || entry.confusedWith === entry.nodeId || !ctx.mathStore.graph().concepts[entry.confusedWith])) {
+				return invalidInputResult(RECORD_EVIDENCE_TOOL, [`confusedWith "${entry.confusedWith}" is no other concept. Create the look-alike with ${UPDATE_CONCEPT_TOOL} first, then record again.`]);
+			}
+			const habits = habitsOf([...(Array.isArray(entry.habits) ? entry.habits : []), ...(entry.confusedWith ? ["confused_with"] : [])]);
 			const saved: MathEvidence = { id: toolCallId, nodeId: entry.nodeId, dimension: entry.dimension, outcome: entry.outcome, hints: entry.hints, note: entry.note, ...(habits ? { habits } : {}) };
 			if (ctx.mathStore) {
 				const t = Date.now();
@@ -231,10 +237,14 @@ export function mathTeacherTools(ctx: MathToolContext) {
 					...(asked?.question ? { question: asked.question.slice(0, 500) } : {}),
 					...(asked ? { questionCallId: asked.id } : {}),
 					...(habits ? { habits } : {}),
+					...(entry.confusedWith ? { confusedWith: entry.confusedWith } : {}),
 					minutesIn: minutesIntoSitting(messages, t, settings),
 				};
 				// The log is the truth: a failed write is this call's failure.
-				try { ctx.mathStore.appendAttempt(attempt); }
+				try {
+					ctx.mathStore.appendAttempt(attempt);
+					if (entry.confusedWith) ctx.mathStore.saveGraph(linkConfusable(ctx.mathStore.graph(), entry.nodeId, entry.confusedWith));
+				}
 				catch (error) { return invalidInputResult(RECORD_EVIDENCE_TOOL, [`The evidence could not be saved (${(error as Error).message}). Try again.`]); }
 			}
 			thisRun.push(saved);
@@ -293,13 +303,10 @@ export function updateConceptTool(ctx: MathToolContext & { mathStore: MathStore 
 			}
 			const problems = scopeProblems(next.id, next);
 			if (problems.length) return invalidInputResult(UPDATE_CONCEPT_TOOL, problems);
-			const concepts = { ...graph.concepts, [next.id]: next };
 			// Confusion is symmetric.
-			for (const other of input.confusableWith ?? []) {
-				const o = concepts[other]!;
-				concepts[other] = { ...o, confusableWith: [...new Set([...(o.confusableWith ?? []), next.id])] };
-			}
-			ctx.mathStore.saveGraph({ ...graph, concepts });
+			let saved = { ...graph, concepts: { ...graph.concepts, [next.id]: next } };
+			for (const other of input.confusableWith ?? []) saved = linkConfusable(saved, next.id, other);
+			ctx.mathStore.saveGraph(saved);
 			const details = { ok: true, concept: conceptBrief(next) };
 			return { content: [{ type: "text", text: JSON.stringify(details) }], details };
 		},

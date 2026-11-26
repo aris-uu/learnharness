@@ -159,6 +159,16 @@ describe("math tools", () => {
 		const draftTools = createTeacherTools({ ...(globalCtx as object), mathStore: draft } as never, undefined, "math");
 		assert.match(JSON.stringify(await draftTools.explain!.execute("g2", { ...explainArgs, nodeId: "b", conceal: true })), /update_concept/, "a draft scope is confirmed before quizzing");
 	});
+	it("record_evidence: confusedWith links the look-alike and tags the habit", async () => {
+		const mathStore = memoryMathStore({ graph: graphOf([concept("a"), concept("b")], [{ from: "a", to: "b" }]) });
+		const tools = createTeacherTools({ chatId: "c", chatStore: { getChat: () => chat }, jobStore: {}, spawn: () => {}, searchAvailable: () => false, mathStore } as never, undefined, "math");
+		const miss = { nodeId: "a", dimension: "K", outcome: "incorrect", hints: 0, note: "stated b instead" };
+		assert.match(JSON.stringify(await tools.record_evidence!.execute("c0", { ...miss, confusedWith: "zzz" })), /update_concept first/);
+		await tools.record_evidence!.execute("c1", { ...miss, confusedWith: "b" });
+		assert.deepEqual([mathStore.appended[0]!.habits, mathStore.appended[0]!.confusedWith], [["confused_with"], "b"]);
+		assert.deepEqual(mathStore.graph().concepts.a!.confusableWith, ["b"]);
+		assert.deepEqual(mathStore.graph().concepts.b!.confusableWith, ["a"]);
+	});
 	it("credits a node from this session's probe answer, and only from an answered written one", async () => {
 		const probe = { messages: [
 			{ role: "assistant", content: [{ type: "toolCall", id: "p1", name: "recall", arguments: { question: "State it" } }, { type: "toolCall", id: "p2", name: "recall", arguments: { question: "And this?" } }] },

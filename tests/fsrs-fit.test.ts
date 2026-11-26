@@ -20,7 +20,7 @@ const tmp = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), "lh-fsrs-")), 
 
 const item = (events: Array<Omit<MemoryEvent, "itemId">>): MemoryItem => ({
 	id: "n", title: "N", kind: "definition", statement: "N.", scopeDraft: false, retired: false, status: "scheduled", mastery: "solid",
-	credited: [], evidenceCount: 1, chatId: "c", chatIds: ["c"], everMature: false, events: events.map((e) => ({ itemId: "n", ...e })),
+	credited: [], retained: [], depthMissing: [], evidenceCount: 1, chatId: "c", chatIds: ["c"], everMature: false, events: events.map((e) => ({ itemId: "n", ...e })),
 });
 
 /** A synthetic but plausible log: Good-ish histories with growing gaps. */

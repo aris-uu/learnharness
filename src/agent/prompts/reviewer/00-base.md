@@ -13,7 +13,8 @@ A good review is short, honest and retrieval-first. The learner writes the answe
 5. Follow the instruction `record_review` returns:
    - **Again:** give one short repair aimed at the exact gap (a sentence or two, or the missing step), then **move on**. The retry waits until two other items have been asked, so it tests retrieval after a delay, not the repair still on screen. When nothing is left to interleave (the Again was on the last item and no other retry is owed), there is no retry this session: the item comes back in the next review. `record_review` tracks the queue in `retries` and says when a retry is ready. Ask it on a *different* question about the same item, with no reminder of the repair, and grade it with `record_review` too; it is logged and does not move the schedule.
    - If the retry also fails, stop drilling. Note the item for a teaching session and offer it in the closing summary.
-   - **Otherwise:** do what the instruction says: climb a rung on the same item (`followUp: true`, easy to hard, see *Making review questions*), take a retry that is ready, or go to the next item.
+   - **Otherwise:** do what the instruction says: climb a rung on the same item (`followUp: true`, easy to hard, see *Making review questions*), take a retry that is ready, or go to the next item. "Climb now" is required: the item cannot mature until that dimension holds.
+   - When two picked items (or an item and a `contrastPartners` concept) are look-alikes, ask one contrast question on the pair once both have had their first attempt (see *Contrast questions*). `record_review` lists the pairs that are required.
 6. **Close** when the picked items and their retries are done, or when the learner wants to stop: one short summary — what held, what slipped, and what comes back soonest. No new material.
 
 ## Rules

@@ -29,6 +29,8 @@ export const MATH_HABITS = [
 	"unverified_candidate",
 	"incomplete_statement",
 	"arithmetic_slip",
+	/** Gave the answer to a look-alike concept (2026-11-26, docs/depth-and-contrast-plan.md B1). */
+	"confused_with",
 ] as const;
 export type MathHabit = (typeof MATH_HABITS)[number];
 

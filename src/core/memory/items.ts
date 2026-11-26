@@ -67,6 +67,12 @@ export interface MemoryEvent {
 	cappedFrom?: FsrsRating;
 	/** For implicit: the concept whose review gave it. */
 	via?: string;
+	/** For check events: which check (repair, close, contrast). */
+	check?: string;
+	/** Why the rating was capped below what was graded (cappedFrom set). */
+	cappedBy?: "followup" | "depth" | "contrast";
+	/** The rating before the depth / contrast cap: what recall actually showed, so FSRS trains on it (the cap is policy, not memory). */
+	depthFrom?: FsrsRating;
 }
 
 const ms = (iso: string) => Date.parse(iso);
@@ -82,7 +88,60 @@ export function capByFollowUps(events: readonly MemoryEvent[]): MemoryEvent[] {
 	return events.map((event) => {
 		if (event.kind !== "review" || event.rating < 3 || !event.chatId) return event;
 		const slipped = events.some((f) => f.kind === "followup" && f.chatId === event.chatId && f.itemId === event.itemId && ms(f.at) >= ms(event.at) && f.rating <= 2);
-		return slipped ? { ...event, rating: (event.rating - 1) as FsrsRating, cappedFrom: event.rating } : event;
+		return slipped ? { ...event, rating: (event.rating - 1) as FsrsRating, cappedFrom: event.rating, cappedBy: "followup" } : event;
+	});
+}
+
+/**
+ * DEPTH BEFORE MATURITY (owner, 2026-11-26, docs/depth-and-contrast-plan.md A1):
+ * the dimensions an item must show AFTER the encoding window before a clean
+ * first attempt may count as more than Hard. A statement held a week later
+ * says the statement survived, not the proof or the reason.
+ */
+export const DEPTH_TARGET: Record<ConceptKind, readonly MathDimension[]> = {
+	definition: ["K", "U"],
+	fact: ["K", "U"],
+	theorem: ["K", "P"],
+	technique: ["K", "S"],
+	example: ["S"],
+};
+
+/** Event kinds whose clean answers count as retained depth: the schedule-moving first attempt, follow-ups and close checks (not repairs, retries or contrasts). */
+const depthEvidence = (e: MemoryEvent) => e.kind === "review" || e.kind === "followup" || (e.kind === "check" && e.check === "close");
+
+/**
+ * The dimensions held cleanly (Good or Easy) outside the encoding window,
+ * by events up to `untilMs` (inclusive) plus any event of `chatId`.
+ */
+export function retainedDims(events: readonly MemoryEvent[], firstAttemptMs: number, untilMs = Infinity, chatId?: string): MathDimension[] {
+	const held = new Set<MathDimension>();
+	for (const e of events) {
+		// The answer as graded: a cap on the schedule does not undo what the answer showed.
+		if (!depthEvidence(e) || !e.dimension || (e.cappedFrom ?? e.rating) < 3) continue;
+		const at = ms(e.at);
+		if (at - firstAttemptMs < ENCODING_WINDOW_MS) continue;
+		if (at > untilMs && (!chatId || e.chatId !== chatId)) continue;
+		held.add(e.dimension);
+	}
+	return MATH_DIMENSIONS.filter((d) => held.has(d));
+}
+
+/** What `kind` still needs beyond `retained`. */
+export const depthMissingFor = (kind: ConceptKind, retained: readonly MathDimension[]): MathDimension[] => DEPTH_TARGET[kind].filter((d) => !retained.includes(d));
+
+/**
+ * The depth cap (A2) and the contrast cap (B2), applied after capByFollowUps:
+ * a Good or Easy first attempt is capped at Hard when, after its sitting, the
+ * item still misses part of its depth target, or when a contrast check on it
+ * failed in that sitting (a pair still being confused cannot mature).
+ */
+export function capByDepth(events: readonly MemoryEvent[], kind: ConceptKind, firstAttemptMs: number): MemoryEvent[] {
+	return events.map((event) => {
+		if (event.kind !== "review" || event.rating < 3) return event;
+		const contrastFailed = !!event.chatId && events.some((c) => c.kind === "check" && c.check === "contrast" && c.chatId === event.chatId && c.rating <= 2);
+		const missing = depthMissingFor(kind, retainedDims(events, firstAttemptMs, ms(event.at), event.chatId));
+		if (!contrastFailed && missing.length === 0) return event;
+		return { ...event, rating: 2 as FsrsRating, cappedFrom: event.cappedFrom ?? event.rating, cappedBy: contrastFailed ? "contrast" : "depth", depthFrom: event.rating };
 	});
 }
 
@@ -106,6 +165,9 @@ export interface MemoryItem {
 	mastery: MathNodeStatus;
 	/** Dimensions credited (correct/correct_slow, at most one hint) anywhere. */
 	credited: MathDimension[];
+	/** Dimensions held cleanly after the encoding window (retainedDims), and what the kind's depth target still misses. */
+	retained: MathDimension[];
+	depthMissing: MathDimension[];
 	evidenceCount: number;
 	/** The sitting of the latest attempt, and every sitting that touched it, oldest first. */
 	chatId: string;
@@ -176,8 +238,8 @@ export function replay(events: readonly MemoryEvent[], weights?: FsrsWeights, im
 	return state ?? undefined;
 }
 
-/** A concept's own events by the schedule rule (1–2), capped by failed follow-ups. */
-export function conceptEvents(conceptId: string, attempts: readonly Attempt[]): { events: MemoryEvent[]; seed: ReturnType<typeof seedFor>; unverified: boolean } {
+/** A concept's own events by the schedule rule (1–2), capped by failed follow-ups, then by depth and failed contrasts (when `kind` is given). */
+export function conceptEvents(conceptId: string, attempts: readonly Attempt[], kind?: ConceptKind): { events: MemoryEvent[]; seed: ReturnType<typeof seedFor>; unverified: boolean } {
 	const sorted = [...attempts].sort((a, b) => ms(a.at) - ms(b.at));
 	const sittings: string[] = [];
 	for (const a of sorted) if (!sittings.includes(a.chatId)) sittings.push(a.chatId);
@@ -203,10 +265,11 @@ export function conceptEvents(conceptId: string, attempts: readonly Attempt[]): 
 		}
 		for (const a of here) {
 			if (a.role === "attempt" || a.rating === undefined) continue;
-			events.push({ itemId: conceptId, at: a.at, kind: a.role, rating: a.rating, chatId, dimension: a.dimension, attemptId: a.id });
+			events.push({ itemId: conceptId, at: a.at, kind: a.role, rating: a.rating, chatId, dimension: a.dimension, attemptId: a.id, ...(a.check ? { check: a.check } : {}) });
 		}
 	}
-	return { events: capByFollowUps(events.sort((a, b) => ms(a.at) - ms(b.at))), seed: firstSeed, unverified };
+	const capped = capByFollowUps(events.sort((a, b) => ms(a.at) - ms(b.at)));
+	return { events: kind && sorted.length ? capByDepth(capped, kind, ms(sorted[0]!.at)) : capped, seed: firstSeed, unverified };
 }
 
 /**
@@ -229,7 +292,8 @@ function implicitEvents(graph: ConceptGraph, eventsBy: Map<string, MemoryEvent[]
 	for (const event of all) {
 		const at = ms(event.at);
 		apply(event.itemId, event.rating, at);
-		if (event.kind !== "review" || event.rating < 3 || !event.dimension || event.dimension === "K") continue;
+		// The answer was clean even when depth capped its schedule rating.
+		if (event.kind !== "review" || (event.cappedFrom ?? event.rating) < 3 || !event.dimension || event.dimension === "K") continue;
 		for (const pre of prerequisitesOf(graph, event.itemId)) {
 			const s = states.get(pre);
 			if (!s || (event.chatId && attemptedIn.get(pre)?.has(event.chatId))) continue;
@@ -254,7 +318,7 @@ export function memoryItems(graph: ConceptGraph, attempts: readonly Attempt[], o
 	const meta = new Map<string, ReturnType<typeof conceptEvents>>();
 	const attemptedIn = new Map<string, Set<string>>();
 	for (const [id, list] of byConcept) {
-		const result = conceptEvents(id, list);
+		const result = conceptEvents(id, list, graph.concepts[id]?.kind ?? "fact");
 		meta.set(id, result);
 		eventsBy.set(id, result.events);
 		attemptedIn.set(id, new Set(list.map((a) => a.chatId)));
@@ -280,6 +344,8 @@ export function memoryItems(graph: ConceptGraph, attempts: readonly Attempt[], o
 			if (daysTo90(state, options.weights) >= MATURE_STABILITY_DAYS) everMature = true;
 		}
 		const evidence = list.map(asEvidence);
+		const kind = concept?.kind ?? "fact";
+		const retained = list.length ? retainedDims(m?.events ?? [], ms(list[0]!.at)) : [];
 		const chatIds = [...new Set([...list.map((a) => a.chatId), ...(notesBy.get(id) ?? []).map((n) => n.chatId)])];
 		items.push({
 			id,
@@ -292,6 +358,8 @@ export function memoryItems(graph: ConceptGraph, attempts: readonly Attempt[], o
 			status: state ? "scheduled" : "unverified",
 			mastery: nodeStatus(id, evidence),
 			credited: MATH_DIMENSIONS.filter((d) => list.some((e) => e.dimension === d && credits(e))),
+			retained,
+			depthMissing: depthMissingFor(kind, retained),
 			evidenceCount: list.length,
 			chatId: list.at(-1)?.chatId ?? chatIds.at(-1) ?? concept?.createdIn ?? "",
 			chatIds,
@@ -367,7 +435,7 @@ export function trainingItems(items: readonly MemoryItem[]): TrainingReview[][] 
 			.filter((e) => (e.kind === "seed" || e.kind === "review") && Number.isFinite(ms(e.at)))
 			.sort((a, b) => ms(a.at) - ms(b.at));
 		const reviews = moving.map((e, i): TrainingReview => ({
-			rating: e.rating,
+			rating: e.depthFrom ?? e.rating,
 			deltaT: i === 0 ? 0 : Math.max(0, (ms(e.at) - ms(moving[i - 1]!.at)) / 86_400_000),
 		}));
 		for (let k = 2; k <= reviews.length; k++) out.push(reviews.slice(0, k));
